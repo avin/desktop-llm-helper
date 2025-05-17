@@ -1,5 +1,8 @@
 #include "taskwidget.h"
 #include "ui_taskwidget.h"
+#include <QLineEdit>
+#include <QTextEdit>
+#include <QRadioButton>
 
 TaskWidget::TaskWidget(QWidget *parent)
     : QWidget(parent)
@@ -7,6 +10,11 @@ TaskWidget::TaskWidget(QWidget *parent)
 {
     ui->setupUi(this);
     ui->radioInsert->setChecked(true);
+
+    connect(ui->lineEditName, &QLineEdit::textChanged, this, &TaskWidget::configChanged);
+    connect(ui->textEditPrompt, &QTextEdit::textChanged, this, &TaskWidget::configChanged);
+    connect(ui->radioInsert, &QRadioButton::toggled, this, &TaskWidget::configChanged);
+    connect(ui->radioWindow, &QRadioButton::toggled, this, &TaskWidget::configChanged);
 }
 
 TaskWidget::~TaskWidget()
@@ -17,4 +25,37 @@ TaskWidget::~TaskWidget()
 void TaskWidget::on_pushButtonDelete_clicked()
 {
     emit removeRequested(this);
+}
+
+QString TaskWidget::name() const
+{
+    return ui->lineEditName->text();
+}
+
+QString TaskWidget::prompt() const
+{
+    return ui->textEditPrompt->toPlainText();
+}
+
+bool TaskWidget::insertMode() const
+{
+    return ui->radioInsert->isChecked();
+}
+
+void TaskWidget::setName(const QString& name)
+{
+    ui->lineEditName->setText(name);
+}
+
+void TaskWidget::setPrompt(const QString& prompt)
+{
+    ui->textEditPrompt->setPlainText(prompt);
+}
+
+void TaskWidget::setInsertMode(bool insert)
+{
+    if (insert)
+        ui->radioInsert->setChecked(true);
+    else
+        ui->radioWindow->setChecked(true);
 }
