@@ -1,7 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "taskwidget.h"
-#include "taskwindow.h"    
+#include "taskwindow.h"
 #include "hotkeymanager.h"
 
 #include <QFile>
