@@ -21,34 +21,68 @@ class GlobalKeyInterceptor {
 public:
     static bool capturing;
     static HHOOK hookHandle;
+    enum ModBits { MB_CTRL = 1, MB_ALT = 2, MB_SHIFT = 4, MB_WIN = 8 };
+    static int modState;
 
     static LRESULT CALLBACK hookProc(int nCode, WPARAM wParam, LPARAM lParam) {
-        if (nCode >= 0 && capturing && wParam == WM_KEYDOWN) {
-            auto kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+        if (nCode < 0) 
+            return CallNextHookEx(hookHandle, nCode, wParam, lParam);
+
+        KBDLLHOOKSTRUCT* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+
+        if (!capturing)
+            return CallNextHookEx(hookHandle, nCode, wParam, lParam);
+
+        if (wParam == WM_KEYDOWN) {
             int vk = kb->vkCode;
-            QString seq;
-            if (GetAsyncKeyState(VK_CONTROL) & 0x8000) seq += "Ctrl+";
-            if (GetAsyncKeyState(VK_MENU) & 0x8000)    seq += "Alt+";
-            if (GetAsyncKeyState(VK_SHIFT) & 0x8000)   seq += "Shift+";
-            if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000)
-                seq += "Win+";
+            switch (vk) {
+                case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+                    modState |= MB_CTRL; return 1;
+                case VK_MENU: case VK_LMENU: case VK_RMENU:
+                    modState |= MB_ALT; return 1;
+                case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+                    modState |= MB_SHIFT; return 1;
+                case VK_LWIN: case VK_RWIN:
+                    modState |= MB_WIN; return 1;
+                default: {
+                    QString seq;
+                    if (modState & MB_CTRL)  seq += "Ctrl+";
+                    if (modState & MB_ALT)   seq += "Alt+";
+                    if (modState & MB_SHIFT) seq += "Shift+";
+                    if (modState & MB_WIN)   seq += "Win+";
 
-            wchar_t name[64] = {0};
-            if (GetKeyNameTextW(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) << 16, name, 64) > 0) {
-                seq += QString::fromWCharArray(name);
-            } else {
-                seq += QString::number(vk);
-            }
+                    wchar_t name[64] = {0};
+                    if (GetKeyNameTextW(
+                            MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) << 16,
+                            name, 64) > 0) {
+                        seq += QString::fromWCharArray(name);
+                    } else {
+                        seq += QString::number(vk);
+                    }
 
-            if (MainWindow::instance) {
-                QMetaObject::invokeMethod(
-                    MainWindow::instance,
-                    "setHotkeyText",
-                    Qt::QueuedConnection,
-                    Q_ARG(QString, seq)
-                );
+                    QMetaObject::invokeMethod(
+                        MainWindow::instance,
+                        "setHotkeyText",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, seq)
+                    );
+                    modState = 0;
+                    return 1;
+                }
             }
-            return 1;
+        } else if (wParam == WM_KEYUP) {
+            int vk = kb->vkCode;
+            switch (vk) {
+                case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+                    modState &= ~MB_CTRL; break;
+                case VK_MENU: case VK_LMENU: case VK_RMENU:
+                    modState &= ~MB_ALT; break;
+                case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+                    modState &= ~MB_SHIFT; break;
+                case VK_LWIN: case VK_RWIN:
+                    modState &= ~MB_WIN; break;
+                default: break;
+            }
         }
         return CallNextHookEx(hookHandle, nCode, wParam, lParam);
     }
@@ -73,6 +107,7 @@ public:
 
 bool GlobalKeyInterceptor::capturing = false;
 HHOOK GlobalKeyInterceptor::hookHandle = nullptr;
+int GlobalKeyInterceptor::modState = 0;
 #endif
 
 MainWindow::MainWindow(QWidget *parent)
