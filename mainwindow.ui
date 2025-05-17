@@ -102,11 +102,12 @@
             <rect><x>0</x><y>0</y><width>780</width><height>400</height></rect>
            </property>
            <layout class="QVBoxLayout" name="verticalLayoutScroll">
-            <property name="spacing"><number>6</number></property>
-            <property name="leftMargin"><number>0</number></property>
-            <property name="topMargin"><number>0</number></property>
-            <property name="rightMargin"><number>0</number></property>
-            <property name="bottomMargin"><number>0</number></property>
+            <property name="spacing"><number>10</number></property>
+            <property name="leftMargin"><number>10</number></property>
+            <property name="topMargin"><number>10</number></property>
+            <property name="rightMargin"><number>10</number></property>
+            <property name="bottomMargin"><number>10</number></property>
+            <property name="alignment"><set>Qt::AlignTop</set></property>
            </layout>
           </widget>
          </widget>
