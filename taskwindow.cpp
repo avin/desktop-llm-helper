@@ -8,9 +8,9 @@
 TaskWindow::TaskWindow(const QList<TaskWidget*>& tasks, QWidget* parent)
     : QWidget(parent,
               Qt::Window
-              | Qt::WindowStaysOnTopHint
-              | Qt::CustomizeWindowHint
-              | Qt::WindowTitleHint)
+            | Qt::WindowStaysOnTopHint
+            | Qt::CustomizeWindowHint
+            | Qt::FramelessWindowHint)
 {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setMinimumWidth(400);
