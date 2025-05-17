@@ -19,10 +19,11 @@ TaskWindow::TaskWindow(const QList<TaskWidget*>& tasks, QWidget* parent)
 
     for (TaskWidget* task : tasks) {
         if (!task) continue;
-        const QString text = task->name().isEmpty() ? tr("Задача") : task->name();
+        QString text = task->name().isEmpty()
+                       ? tr("<Без имени>")
+                       : task->name();
         auto* btn = new QPushButton(text, this);
         connect(btn, &QPushButton::clicked, this, [this, task]() {
-            // TODO: вызвать выполнение задачи (task)
             close();
         });
         layout->addWidget(btn);
@@ -31,7 +32,6 @@ TaskWindow::TaskWindow(const QList<TaskWidget*>& tasks, QWidget* parent)
     layout->setContentsMargins(12, 12, 12, 12);
     adjustSize();
 
-    // Показ сразу после конструктора
     show();
     raise();
     activateWindow();

@@ -20,8 +20,6 @@
 
 MainWindow* MainWindow::instance = nullptr;
 
-//──────────────────────────────────────────────────────────────────────────
-// Хук для захвата хоткея во время его ввода в lineEdit (остался без изменений)
 #ifdef Q_OS_WIN
 class GlobalKeyInterceptor {
 public:
@@ -118,8 +116,6 @@ HHOOK GlobalKeyInterceptor::hookHandle = nullptr;
 int GlobalKeyInterceptor::modState = 0;
 #endif  // Q_OS_WIN
 
-//──────────────────────────────────────────────────────────────────────────
-//                              MainWindow
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
@@ -129,7 +125,6 @@ MainWindow::MainWindow(QWidget *parent)
     instance = this;
     ui->setupUi(this);
 
-    // lineEdit → сохранение конфигурации
     connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditModelName,   &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditApiKey,      &QLineEdit::textChanged, this, &MainWindow::saveConfig);
@@ -156,7 +151,6 @@ MainWindow::~MainWindow()
     instance = nullptr;
 }
 
-//──────────────────────────────────────────────────────────────────────────
 bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
 {
 #ifdef Q_OS_WIN
@@ -177,8 +171,6 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
     return QMainWindow::eventFilter(obj, ev);
 }
 
-//──────────────────────────────────────────────────────────────────────────
-//                      Работа с конфигурацией
 void MainWindow::setHotkeyText(const QString &text)
 {
     ui->lineEditHotkey->setText(text);
@@ -188,10 +180,9 @@ void MainWindow::setHotkeyText(const QString &text)
 
 QString MainWindow::configFilePath() const
 {
-    // Используем постоянный каталог пользователя
     const QString baseDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     const QString dirPath = baseDir + QDir::separator() + QCoreApplication::applicationName();
-    QDir().mkpath(dirPath);                   // гарантируем существование
+    QDir().mkpath(dirPath);
     return dirPath + QDir::separator() + "config.json";
 }
 
@@ -228,9 +219,16 @@ void MainWindow::loadConfig()
 
         connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
         connect(task, &TaskWidget::configChanged,    this, &MainWindow::saveConfig);
+        connect(task, &TaskWidget::configChanged,    this, [this, task]() {
+            int idx = ui->tasksTabWidget->indexOf(task);
+            if (idx != -1) {
+                QString label = task->name().isEmpty() ? tr("<Без имени>") : task->name();
+                ui->tasksTabWidget->setTabText(idx, label);
+            }
+        });
 
-        ui->tasksTabWidget->addTab(task,
-            tr("Задача %1").arg(ui->tasksTabWidget->count() + 1));
+        QString tabLabel = task->name().isEmpty() ? tr("<Без имени>") : task->name();
+        ui->tasksTabWidget->addTab(task, tabLabel);
     }
 }
 
@@ -271,16 +269,21 @@ void MainWindow::saveConfig()
     hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
-//──────────────────────────────────────────────────────────────────────────
-//                   Управление задачами (кнопки/таб)
 void MainWindow::on_pushButtonAddTask_clicked()
 {
     auto* task = new TaskWidget;
     connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
     connect(task, &TaskWidget::configChanged,   this, &MainWindow::saveConfig);
+    connect(task, &TaskWidget::configChanged,   this, [this, task]() {
+        int idx = ui->tasksTabWidget->indexOf(task);
+        if (idx != -1) {
+            QString label = task->name().isEmpty() ? tr("<Без имени>") : task->name();
+            ui->tasksTabWidget->setTabText(idx, label);
+        }
+    });
 
-    const int index = ui->tasksTabWidget->addTab(
-        task, tr("Задача %1").arg(ui->tasksTabWidget->count() + 1));
+    QString tabLabel = task->name().isEmpty() ? tr("<Без имени>") : task->name();
+    int index = ui->tasksTabWidget->addTab(task, tabLabel);
     ui->tasksTabWidget->setCurrentIndex(index);
 
     saveConfig();
@@ -288,7 +291,7 @@ void MainWindow::on_pushButtonAddTask_clicked()
 
 void MainWindow::removeTaskWidget(TaskWidget* task)
 {
-    const int index = ui->tasksTabWidget->indexOf(task);
+    int index = ui->tasksTabWidget->indexOf(task);
     if (index != -1) {
         QWidget* page = ui->tasksTabWidget->widget(index);
         ui->tasksTabWidget->removeTab(index);
@@ -297,8 +300,6 @@ void MainWindow::removeTaskWidget(TaskWidget* task)
     }
 }
 
-//──────────────────────────────────────────────────────────────────────────
-//                 Глобальный хоткей и TaskDialog
 QList<TaskWidget*> MainWindow::currentTasks() const
 {
     QList<TaskWidget*> list;
@@ -335,6 +336,5 @@ void MainWindow::simulateCtrlX() const
 void MainWindow::handleGlobalHotkey()
 {
     simulateCtrlX();
-    // независимое top-level-окно
-    new TaskWindow(currentTasks()); // самоудалится по WA_DeleteOnClose
+    new TaskWindow(currentTasks());
 }
