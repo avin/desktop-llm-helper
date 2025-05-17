@@ -2,7 +2,7 @@
 #include "ui_taskwidget.h"
 
 TaskWidget::TaskWidget(QWidget *parent)
-    : QWidget(parent)
+    : QFrame(parent)
     , ui(new Ui::TaskWidget)
 {
     ui->setupUi(this);
