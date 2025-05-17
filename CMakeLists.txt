@@ -20,6 +20,10 @@ set(PROJECT_SOURCES
         taskwidget.cpp
         taskwidget.h
         taskwidget.ui
+        hotkeymanager.cpp
+        hotkeymanager.h
+        taskdialog.cpp
+        taskdialog.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)

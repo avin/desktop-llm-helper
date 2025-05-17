@@ -4,6 +4,9 @@
 #include <QMainWindow>
 #include <QString>
 #include <QEvent>
+#include <QList>
+
+#include "hotkeymanager.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -23,6 +26,7 @@ public:
 
 public slots:
     void setHotkeyText(const QString &text);
+    void handleGlobalHotkey();
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -35,9 +39,14 @@ private:
     Ui::MainWindow *ui;
     QString prevHotkey;
     bool hotkeyCaptured;
+    HotkeyManager* hotkeyManager;
+
     void loadConfig();
     void saveConfig();
     QString configFilePath() const;
+
+    QList<TaskWidget*> currentTasks() const;
+    void simulateCtrlX() const;
 };
 
 #endif // MAINWINDOW_H

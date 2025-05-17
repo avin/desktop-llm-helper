@@ -1,6 +1,9 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "taskwidget.h"
+#include "taskdialog.h"
+#include "hotkeymanager.h"
+
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -16,6 +19,8 @@
 
 MainWindow* MainWindow::instance = nullptr;
 
+//──────────────────────────────────────────────────────────────────────────
+// Хук для захвата хоткея во время его ввода в lineEdit (остался без изменений)
 #ifdef Q_OS_WIN
 class GlobalKeyInterceptor {
 public:
@@ -94,7 +99,7 @@ public:
             hookHandle = SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 hookProc,
-                GetModuleHandleW(NULL),
+                GetModuleHandleW(nullptr),
                 0
             );
         }
@@ -110,16 +115,20 @@ public:
 bool GlobalKeyInterceptor::capturing = false;
 HHOOK GlobalKeyInterceptor::hookHandle = nullptr;
 int GlobalKeyInterceptor::modState = 0;
-#endif
+#endif  // Q_OS_WIN
 
+//──────────────────────────────────────────────────────────────────────────
+//                              MainWindow
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , hotkeyCaptured(false)
+    , hotkeyManager(new HotkeyManager(this))
 {
     instance = this;
     ui->setupUi(this);
 
+    // lineEdit → сохранение конфигурации
     connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditModelName,   &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditApiKey,      &QLineEdit::textChanged, this, &MainWindow::saveConfig);
@@ -128,7 +137,13 @@ MainWindow::MainWindow(QWidget *parent)
 
     ui->lineEditHotkey->installEventFilter(this);
 
+#ifdef Q_OS_WIN
+    connect(hotkeyManager, &HotkeyManager::hotkeyPressed,
+            this,          &MainWindow::handleGlobalHotkey);
+#endif
+
     loadConfig();
+    hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
 MainWindow::~MainWindow()
@@ -140,6 +155,7 @@ MainWindow::~MainWindow()
     instance = nullptr;
 }
 
+//──────────────────────────────────────────────────────────────────────────
 bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
 {
 #ifdef Q_OS_WIN
@@ -160,6 +176,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
     return QMainWindow::eventFilter(obj, ev);
 }
 
+//──────────────────────────────────────────────────────────────────────────
+//                      Работа с конфигурацией
 void MainWindow::setHotkeyText(const QString &text)
 {
     ui->lineEditHotkey->setText(text);
@@ -176,20 +194,20 @@ QString MainWindow::configFilePath() const
 
 void MainWindow::loadConfig()
 {
-    QString path = configFilePath();
+    const QString path = configFilePath();
     QFile file(path);
     if (!file.exists() || !file.open(QIODevice::ReadOnly))
         return;
 
-    QByteArray data = file.readAll();
+    const QByteArray data = file.readAll();
     file.close();
 
-    QJsonDocument doc = QJsonDocument::fromJson(data);
+    const QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull() || !doc.isObject())
         return;
 
-    QJsonObject root = doc.object();
-    QJsonObject settings = root.value("settings").toObject();
+    const QJsonObject root = doc.object();
+    const QJsonObject settings = root.value("settings").toObject();
 
     ui->lineEditApiEndpoint->setText(settings.value("apiEndpoint").toString());
     ui->lineEditModelName->setText(settings.value("modelName").toString());
@@ -197,10 +215,10 @@ void MainWindow::loadConfig()
     ui->lineEditProxy->setText(settings.value("proxy").toString());
     ui->lineEditHotkey->setText(settings.value("hotkey").toString());
 
-    QJsonArray tasks = root.value("tasks").toArray();
+    const QJsonArray tasks = root.value("tasks").toArray();
     for (const QJsonValue &value : tasks) {
-        QJsonObject obj = value.toObject();
-        TaskWidget* task = new TaskWidget;
+        const QJsonObject obj = value.toObject();
+        auto* task = new TaskWidget;
         task->setName(obj.value("name").toString());
         task->setPrompt(obj.value("prompt").toString());
         task->setInsertMode(obj.value("insert").toBool(true));
@@ -215,44 +233,50 @@ void MainWindow::loadConfig()
 
 void MainWindow::saveConfig()
 {
-    QJsonObject root;
-    QJsonObject settings;
-    settings["apiEndpoint"] = ui->lineEditApiEndpoint->text();
-    settings["modelName"]   = ui->lineEditModelName->text();
-    settings["apiKey"]      = ui->lineEditApiKey->text();
-    settings["proxy"]       = ui->lineEditProxy->text();
-    settings["hotkey"]      = ui->lineEditHotkey->text();
-    root["settings"] = settings;
+    QJsonObject settings{
+        { "apiEndpoint", ui->lineEditApiEndpoint->text() },
+        { "modelName",   ui->lineEditModelName->text()   },
+        { "apiKey",      ui->lineEditApiKey->text()      },
+        { "proxy",       ui->lineEditProxy->text()       },
+        { "hotkey",      ui->lineEditHotkey->text()      }
+    };
 
     QJsonArray tasksArray;
     for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
-        TaskWidget* task = qobject_cast<TaskWidget*>(
-            ui->tasksTabWidget->widget(i));
+        const auto* task = qobject_cast<TaskWidget*>(ui->tasksTabWidget->widget(i));
         if (!task) continue;
 
-        QJsonObject obj;
-        obj["name"]   = task->name();
-        obj["prompt"] = task->prompt();
-        obj["insert"] = task->insertMode();
-        tasksArray.append(obj);
+        tasksArray.append(QJsonObject{
+            { "name",   task->name()       },
+            { "prompt", task->prompt()     },
+            { "insert", task->insertMode() }
+        });
     }
-    root["tasks"] = tasksArray;
 
-    QJsonDocument doc(root);
+    QJsonObject root{
+        { "settings", settings },
+        { "tasks",    tasksArray }
+    };
+
+    const QJsonDocument doc(root);
     QFile file(configFilePath());
     if (file.open(QIODevice::WriteOnly)) {
         file.write(doc.toJson());
         file.close();
     }
+
+    hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
+//──────────────────────────────────────────────────────────────────────────
+//                   Управление задачами (кнопки/таб)
 void MainWindow::on_pushButtonAddTask_clicked()
 {
-    TaskWidget* task = new TaskWidget;
+    auto* task = new TaskWidget;
     connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
     connect(task, &TaskWidget::configChanged,   this, &MainWindow::saveConfig);
 
-    int index = ui->tasksTabWidget->addTab(
+    const int index = ui->tasksTabWidget->addTab(
         task, tr("Задача %1").arg(ui->tasksTabWidget->count() + 1));
     ui->tasksTabWidget->setCurrentIndex(index);
 
@@ -261,11 +285,53 @@ void MainWindow::on_pushButtonAddTask_clicked()
 
 void MainWindow::removeTaskWidget(TaskWidget* task)
 {
-    int index = ui->tasksTabWidget->indexOf(task);
+    const int index = ui->tasksTabWidget->indexOf(task);
     if (index != -1) {
         QWidget* page = ui->tasksTabWidget->widget(index);
         ui->tasksTabWidget->removeTab(index);
         page->deleteLater();
         saveConfig();
     }
+}
+
+//──────────────────────────────────────────────────────────────────────────
+//                 Глобальный хоткей и TaskDialog
+QList<TaskWidget*> MainWindow::currentTasks() const
+{
+    QList<TaskWidget*> list;
+    for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
+        if (auto* task = qobject_cast<TaskWidget*>(ui->tasksTabWidget->widget(i)))
+            list.append(task);
+    }
+    return list;
+}
+
+void MainWindow::simulateCtrlX() const
+{
+#ifdef Q_OS_WIN
+    INPUT inputs[4] = {};
+
+    inputs[0].type        = INPUT_KEYBOARD;
+    inputs[0].ki.wVk      = VK_CONTROL;
+
+    inputs[1].type        = INPUT_KEYBOARD;
+    inputs[1].ki.wVk      = 'X';
+
+    inputs[2].type        = INPUT_KEYBOARD;
+    inputs[2].ki.wVk      = 'X';
+    inputs[2].ki.dwFlags  = KEYEVENTF_KEYUP;
+
+    inputs[3].type        = INPUT_KEYBOARD;
+    inputs[3].ki.wVk      = VK_CONTROL;
+    inputs[3].ki.dwFlags  = KEYEVENTF_KEYUP;
+
+    SendInput(4, inputs, sizeof(INPUT));
+#endif
+}
+
+void MainWindow::handleGlobalHotkey()
+{
+    simulateCtrlX();
+    TaskDialog dlg(currentTasks(), this);
+    dlg.exec();
 }
