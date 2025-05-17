@@ -1,7 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "taskwidget.h"
-#include "taskdialog.h"
+#include "taskwindow.h"    
 #include "hotkeymanager.h"
 
 #include <QFile>
@@ -332,6 +332,6 @@ void MainWindow::simulateCtrlX() const
 void MainWindow::handleGlobalHotkey()
 {
     simulateCtrlX();
-    TaskDialog dlg(currentTasks(), this);
-    dlg.exec();
+    // независимое top-level-окно
+    new TaskWindow(currentTasks()); // самоудалится по WA_DeleteOnClose
 }
