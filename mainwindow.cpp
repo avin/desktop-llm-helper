@@ -180,10 +180,8 @@ void MainWindow::setHotkeyText(const QString &text)
 
 QString MainWindow::configFilePath() const
 {
-    const QString baseDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-    const QString dirPath = baseDir + QDir::separator() + QCoreApplication::applicationName();
-    QDir().mkpath(dirPath);
-    return dirPath + QDir::separator() + "config.json";
+    QString dir = QCoreApplication::applicationDirPath();
+    return dir + QDir::separator() + "config.json";
 }
 
 void MainWindow::loadConfig()
