@@ -1,14 +1,13 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "taskwidget.h"
-
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QCoreApplication>
 #include <QDir>
-#include <QLineEdit>
+#include <QKeySequenceEdit>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -20,7 +19,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->lineEditModelName, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditApiKey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditProxy, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
-    connect(ui->lineEditHotkey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
+    connect(ui->keySequenceEditHotkey, &QKeySequenceEdit::keySequenceChanged, this, &MainWindow::saveConfig);
 
     loadConfig();
 }
@@ -58,7 +57,9 @@ void MainWindow::loadConfig()
     ui->lineEditModelName->setText(settings.value("modelName").toString());
     ui->lineEditApiKey->setText(settings.value("apiKey").toString());
     ui->lineEditProxy->setText(settings.value("proxy").toString());
-    ui->lineEditHotkey->setText(settings.value("hotkey").toString());
+    ui->keySequenceEditHotkey->setKeySequence(
+        QKeySequence::fromString(settings.value("hotkey").toString())
+    );
 
     QJsonArray tasks = root.value("tasks").toArray();
     for (const QJsonValue &value : tasks) {
@@ -85,7 +86,7 @@ void MainWindow::saveConfig()
     settings["modelName"]   = ui->lineEditModelName->text();
     settings["apiKey"]      = ui->lineEditApiKey->text();
     settings["proxy"]       = ui->lineEditProxy->text();
-    settings["hotkey"]      = ui->lineEditHotkey->text();
+    settings["hotkey"]      = ui->keySequenceEditHotkey->keySequence().toString();
     root["settings"] = settings;
 
     QJsonArray tasksArray;
