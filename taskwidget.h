@@ -1,13 +1,13 @@
 #ifndef TASKWIDGET_H
 #define TASKWIDGET_H
 
-#include <QFrame>
+#include <QWidget>
 
 namespace Ui {
  class TaskWidget;
 }
 
-class TaskWidget : public QFrame {
+class TaskWidget : public QWidget {
  Q_OBJECT
 
 public:

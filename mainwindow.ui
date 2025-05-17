@@ -125,48 +125,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QScrollArea" name="scrollAreaTasks">
-          <property name="autoFillBackground">
-           <bool>false</bool>
-          </property>
-          <property name="verticalScrollBarPolicy">
-           <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
-          </property>
-          <property name="horizontalScrollBarPolicy">
-           <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
-          </property>
-          <property name="widgetResizable">
-           <bool>true</bool>
-          </property>
-          <widget class="QWidget" name="scrollAreaWidgetContents">
-           <property name="geometry">
-            <rect>
-             <x>0</x>
-             <y>0</y>
-             <width>766</width>
-             <height>515</height>
-            </rect>
-           </property>
-           <layout class="QVBoxLayout" name="verticalLayoutScroll">
-            <property name="spacing">
-             <number>10</number>
-            </property>
-            <property name="leftMargin">
-             <number>10</number>
-            </property>
-            <property name="topMargin">
-             <number>10</number>
-            </property>
-            <property name="rightMargin">
-             <number>10</number>
-            </property>
-            <property name="bottomMargin">
-             <number>10</number>
-            </property>
-            <property name="alignment"><set>Qt::AlignTop</set></property>
-           </layout>
-          </widget>
-         </widget>
+         <widget class="QTabWidget" name="tasksTabWidget"/>
         </item>
        </layout>
       </widget>
