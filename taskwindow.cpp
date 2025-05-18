@@ -99,6 +99,11 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             QString apiKey = settings.value("apiKey").toString();
             QString proxyStr = settings.value("proxy").toString();
 
+            int maxChars = settings.value("maxChars").toInt(0);
+            QString sendText = original;
+            if (maxChars > 0 && sendText.length() > maxChars)
+                sendText = sendText.left(maxChars);
+
             auto *manager = new QNetworkAccessManager(this);
             if (!proxyStr.isEmpty()) {
                 QUrl proxyUrl(proxyStr);
@@ -123,7 +128,7 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             systemMessage["content"] = prompt;
             QJsonObject userMessage;
             userMessage["role"] = "user";
-            userMessage["content"] = original;
+            userMessage["content"] = sendText;
             QJsonArray messagesArray;
             messagesArray.append(systemMessage);
             messagesArray.append(userMessage);

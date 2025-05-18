@@ -150,7 +150,6 @@ MainWindow::MainWindow(QWidget *parent)
     instance = this;
     ui->setupUi(this);
 
-    // Разрешаем перетаскивание вкладок задач
     ui->tasksTabWidget->setMovable(true);
     connect(ui->tasksTabWidget->tabBar(), &QTabBar::tabMoved,
             this, &MainWindow::saveConfig);
@@ -160,6 +159,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->lineEditApiKey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditProxy, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditHotkey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
+    connect(ui->lineEditMaxChars, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
 
     ui->lineEditHotkey->installEventFilter(this);
 
@@ -235,6 +235,8 @@ void MainWindow::loadConfig() {
     ui->lineEditApiKey->setText(settings.value("apiKey").toString());
     ui->lineEditProxy->setText(settings.value("proxy").toString());
     ui->lineEditHotkey->setText(settings.value("hotkey").toString());
+    int maxCharsVal = settings.value("maxChars").toInt(0);
+    ui->lineEditMaxChars->setText(QString::number(maxCharsVal));
 
     const QJsonArray tasks = root.value("tasks").toArray();
     for (const QJsonValue &value: tasks) {
@@ -270,7 +272,8 @@ void MainWindow::saveConfig() {
         {"modelName", ui->lineEditModelName->text()},
         {"apiKey", ui->lineEditApiKey->text()},
         {"proxy", ui->lineEditProxy->text()},
-        {"hotkey", ui->lineEditHotkey->text()}
+        {"hotkey", ui->lineEditHotkey->text()},
+        {"maxChars", ui->lineEditMaxChars->text().toInt()}
     };
 
     QJsonArray tasksArray;
