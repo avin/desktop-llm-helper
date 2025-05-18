@@ -13,24 +13,22 @@ class TaskWidget : public QWidget {
 
 public:
     explicit TaskWidget(QWidget *parent = nullptr);
-
     ~TaskWidget();
 
     QString name() const;
-
     QString prompt() const;
-
     bool insertMode() const;
-
     void setName(const QString &name);
-
     void setPrompt(const QString &prompt);
-
     void setInsertMode(bool insert);
+
+    int maxTokens() const;
+    double temperature() const;
+    void setMaxTokens(int tokens);
+    void setTemperature(double temp);
 
 signals:
     void removeRequested(TaskWidget *task);
-
     void configChanged();
 
 private slots:

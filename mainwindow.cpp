@@ -245,6 +245,10 @@ void MainWindow::loadConfig() {
         task->setName(obj.value("name").toString());
         task->setPrompt(obj.value("prompt").toString());
         task->setInsertMode(obj.value("insert").toBool(true));
+        int maxTokensVal = obj.value("maxTokens").toInt(300);
+        double temperatureVal = obj.value("temperature").toDouble(0.5);
+        task->setMaxTokens(maxTokensVal);
+        task->setTemperature(temperatureVal);
 
         connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
         connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
@@ -281,11 +285,13 @@ void MainWindow::saveConfig() {
         const auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i));
         if (!task) continue;
 
-        tasksArray.append(QJsonObject{
-            {"name", task->name()},
-            {"prompt", task->prompt()},
-            {"insert", task->insertMode()}
-        });
+        QJsonObject taskObj;
+        taskObj["name"] = task->name();
+        taskObj["prompt"] = task->prompt();
+        taskObj["insert"] = task->insertMode();
+        taskObj["maxTokens"] = task->maxTokens();
+        taskObj["temperature"] = task->temperature();
+        tasksArray.append(taskObj);
     }
 
     QJsonObject root{

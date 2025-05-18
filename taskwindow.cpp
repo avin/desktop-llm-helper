@@ -132,9 +132,12 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             QJsonArray messagesArray;
             messagesArray.append(systemMessage);
             messagesArray.append(userMessage);
+
             QJsonObject body;
             body["model"] = modelName;
             body["messages"] = messagesArray;
+            body["max_tokens"] = task->maxTokens();
+            body["temperature"] = task->temperature();
             QJsonDocument bodyDoc(body);
 
             manager->post(request, bodyDoc.toJson());
