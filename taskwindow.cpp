@@ -6,10 +6,15 @@
 #include <QEvent>
 #include <QGraphicsDropShadowEffect>
 #include <QGuiApplication>
+#include <QClipboard>
 #include <QKeyEvent>
 #include <QPushButton>
 #include <QScreen>
 #include <QVBoxLayout>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     : QWidget(parent,
@@ -20,12 +25,10 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
 
-    // Основной layout с отступами под тень
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(10, 10, 10, 10);
     mainLayout->setSpacing(0);
 
-    // Контейнер с закруглённым фоном
     auto *container = new QWidget(this);
     container->setObjectName("container");
     container->setStyleSheet("QWidget#container { "
@@ -33,14 +36,12 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
                              "  border-radius: 0px; "
                              "}");
 
-    // Эффект тени
     auto *shadow = new QGraphicsDropShadowEffect(container);
     shadow->setBlurRadius(10);
     shadow->setColor(QColor(0, 0, 0, 160));
     shadow->setOffset(0, 0);
     container->setGraphicsEffect(shadow);
 
-    // Layout для кнопок внутри контейнера
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(2, 2, 2, 2);
     layout->setSpacing(0);
@@ -50,7 +51,47 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             continue;
         QString text = task->name().isEmpty() ? tr("<Без имени>") : task->name();
         auto *btn = new QPushButton(text, container);
-        connect(btn, &QPushButton::clicked, this, [this]() { close(); });
+        connect(btn, &QPushButton::clicked, this, [this, task]() {
+            close();
+#ifdef Q_OS_WIN
+            // Симуляция Ctrl+C
+            INPUT inputs[4] = {};
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].ki.wVk = VK_CONTROL;
+            inputs[1].type = INPUT_KEYBOARD;
+            inputs[1].ki.wVk = 'C';
+            inputs[2].type = INPUT_KEYBOARD;
+            inputs[2].ki.wVk = 'C';
+            inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+            inputs[3].type = INPUT_KEYBOARD;
+            inputs[3].ki.wVk = VK_CONTROL;
+            inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(4, inputs, sizeof(INPUT));
+
+            Sleep(50);
+
+            // Чтение и объединение текста
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            QString original = clipboard->text();
+            QString prompt = task->prompt();
+            QString combined = prompt + original;
+            clipboard->setText(combined);
+
+            // Симуляция Ctrl+V
+            INPUT inputs2[4] = {};
+            inputs2[0].type = INPUT_KEYBOARD;
+            inputs2[0].ki.wVk = VK_CONTROL;
+            inputs2[1].type = INPUT_KEYBOARD;
+            inputs2[1].ki.wVk = 'V';
+            inputs2[2].type = INPUT_KEYBOARD;
+            inputs2[2].ki.wVk = 'V';
+            inputs2[2].ki.dwFlags = KEYEVENTF_KEYUP;
+            inputs2[3].type = INPUT_KEYBOARD;
+            inputs2[3].ki.wVk = VK_CONTROL;
+            inputs2[3].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(4, inputs2, sizeof(INPUT));
+#endif
+        });
         layout->addWidget(btn);
     }
 
@@ -58,7 +99,6 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
 
     adjustSize();
 
-    // Позиционирование окна около курсора
     QPoint cursorPos = QCursor::pos();
     QScreen *screen = QGuiApplication::screenAt(cursorPos);
     if (!screen) {
