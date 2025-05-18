@@ -3,7 +3,6 @@
 #include "taskwidget.h"
 #include "taskwindow.h"
 #include "hotkeymanager.h"
-
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -13,6 +12,7 @@
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QStandardPaths>
+#include <QTabBar>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -149,6 +149,11 @@ MainWindow::MainWindow(QWidget *parent)
       , loadingConfig(false) {
     instance = this;
     ui->setupUi(this);
+
+    // Разрешаем перетаскивание вкладок задач
+    ui->tasksTabWidget->setMovable(true);
+    connect(ui->tasksTabWidget->tabBar(), &QTabBar::tabMoved,
+            this, &MainWindow::saveConfig);
 
     connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditModelName, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
