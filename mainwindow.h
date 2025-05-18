@@ -9,44 +9,52 @@
 #include "hotkeymanager.h"
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class MainWindow; }
+
+namespace Ui {
+    class MainWindow;
+}
+
 QT_END_NAMESPACE
 
 class TaskWidget;
 
-class MainWindow : public QMainWindow
-{
+class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
     ~MainWindow();
 
-    static MainWindow* instance;
+    static MainWindow *instance;
 
 public slots:
     void setHotkeyText(const QString &text);
+
     void handleGlobalHotkey();
 
 protected:
-    bool eventFilter(QObject* obj, QEvent* event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     void on_pushButtonAddTask_clicked();
-    void removeTaskWidget(TaskWidget* task);
+
+    void removeTaskWidget(TaskWidget *task);
 
 private:
     Ui::MainWindow *ui;
     QString prevHotkey;
     bool hotkeyCaptured;
-    HotkeyManager* hotkeyManager;
+    HotkeyManager *hotkeyManager;
     bool loadingConfig;
 
     void loadConfig();
+
     void saveConfig();
+
     QString configFilePath() const;
 
-    QList<TaskWidget*> currentTasks() const;
+    QList<TaskWidget *> currentTasks() const;
 };
 
 #endif // MAINWINDOW_H

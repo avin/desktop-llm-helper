@@ -5,33 +5,39 @@
 #include <QString>
 
 namespace Ui {
- class TaskWidget;
+    class TaskWidget;
 }
 
 class TaskWidget : public QWidget {
- Q_OBJECT
+    Q_OBJECT
 
 public:
- explicit TaskWidget(QWidget *parent = nullptr);
- ~TaskWidget();
+    explicit TaskWidget(QWidget *parent = nullptr);
 
- QString name() const;
- QString prompt() const;
- bool insertMode() const;
+    ~TaskWidget();
 
- void setName(const QString& name);
- void setPrompt(const QString& prompt);
- void setInsertMode(bool insert);
+    QString name() const;
+
+    QString prompt() const;
+
+    bool insertMode() const;
+
+    void setName(const QString &name);
+
+    void setPrompt(const QString &prompt);
+
+    void setInsertMode(bool insert);
 
 signals:
- void removeRequested(TaskWidget* task);
- void configChanged();
+    void removeRequested(TaskWidget *task);
+
+    void configChanged();
 
 private slots:
- void on_pushButtonDelete_clicked();
+    void on_pushButtonDelete_clicked();
 
 private:
- Ui::TaskWidget *ui;
+    Ui::TaskWidget *ui;
 };
 
 #endif // TASKWIDGET_H

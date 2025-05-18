@@ -9,16 +9,16 @@
 class TaskWidget;
 
 
-class TaskWindow : public QWidget
-{
+class TaskWindow : public QWidget {
     Q_OBJECT
+
 public:
-    explicit TaskWindow(const QList<TaskWidget*>& tasks, QWidget* parent = nullptr);
+    explicit TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent = nullptr);
 
 protected:
-    void keyPressEvent(QKeyEvent* ev) override;
-    void changeEvent(QEvent* event) override;
+    void keyPressEvent(QKeyEvent *ev) override;
 
+    void changeEvent(QEvent *event) override;
 };
 
 #endif // TASKWINDOW_H
