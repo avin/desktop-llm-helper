@@ -9,8 +9,20 @@
 #include <QClipboard>
 #include <QKeyEvent>
 #include <QPushButton>
-#include <QScreen>
 #include <QVBoxLayout>
+#include <QScreen>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QNetworkProxy>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QUrl>
+#include <QFile>
+#include <QCoreApplication>
+#include <QDir>
+#include <QTextEdit>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -21,7 +33,6 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
               Qt::Window | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
                   | Qt::FramelessWindowHint)
 {
-    setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
 
@@ -52,45 +63,120 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
         QString text = task->name().isEmpty() ? tr("<Без имени>") : task->name();
         auto *btn = new QPushButton(text, container);
         connect(btn, &QPushButton::clicked, this, [this, task]() {
-            close();
+            this->hide();
+
 #ifdef Q_OS_WIN
-            // Симуляция Ctrl+C
-            INPUT inputs[4] = {};
-            inputs[0].type = INPUT_KEYBOARD;
-            inputs[0].ki.wVk = VK_CONTROL;
-            inputs[1].type = INPUT_KEYBOARD;
-            inputs[1].ki.wVk = 'C';
-            inputs[2].type = INPUT_KEYBOARD;
-            inputs[2].ki.wVk = 'C';
-            inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-            inputs[3].type = INPUT_KEYBOARD;
-            inputs[3].ki.wVk = VK_CONTROL;
-            inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(4, inputs, sizeof(INPUT));
+            INPUT copyInputs[4] = {};
+            copyInputs[0].type = INPUT_KEYBOARD;
+            copyInputs[0].ki.wVk = VK_CONTROL;
+            copyInputs[1].type = INPUT_KEYBOARD;
+            copyInputs[1].ki.wVk = 'C';
+            copyInputs[2].type = INPUT_KEYBOARD;
+            copyInputs[2].ki.wVk = 'C';
+            copyInputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+            copyInputs[3].type = INPUT_KEYBOARD;
+            copyInputs[3].ki.wVk = VK_CONTROL;
+            copyInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(4, copyInputs, sizeof(INPUT));
+#endif
 
-            Sleep(50);
-
-            // Чтение и объединение текста
             QClipboard *clipboard = QGuiApplication::clipboard();
             QString original = clipboard->text();
             QString prompt = task->prompt();
             QString combined = prompt + original;
             clipboard->setText(combined);
 
-            // Симуляция Ctrl+V
-            INPUT inputs2[4] = {};
-            inputs2[0].type = INPUT_KEYBOARD;
-            inputs2[0].ki.wVk = VK_CONTROL;
-            inputs2[1].type = INPUT_KEYBOARD;
-            inputs2[1].ki.wVk = 'V';
-            inputs2[2].type = INPUT_KEYBOARD;
-            inputs2[2].ki.wVk = 'V';
-            inputs2[2].ki.dwFlags = KEYEVENTF_KEYUP;
-            inputs2[3].type = INPUT_KEYBOARD;
-            inputs2[3].ki.wVk = VK_CONTROL;
-            inputs2[3].ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(4, inputs2, sizeof(INPUT));
+            QString configPath = QCoreApplication::applicationDirPath()
+                                 + QDir::separator() + "config.json";
+            QFile configFile(configPath);
+            if (!configFile.open(QIODevice::ReadOnly))
+                return;
+            QJsonDocument configDoc = QJsonDocument::fromJson(configFile.readAll());
+            configFile.close();
+            QJsonObject settings = configDoc.object().value("settings").toObject();
+            QString apiEndpoint = settings.value("apiEndpoint").toString();
+            QString modelName   = settings.value("modelName").toString();
+            QString apiKey      = settings.value("apiKey").toString();
+            QString proxyStr    = settings.value("proxy").toString();
+
+            auto *manager = new QNetworkAccessManager(this);
+            if (!proxyStr.isEmpty()) {
+                QUrl proxyUrl(proxyStr);
+                if (proxyUrl.isValid()) {
+                    QNetworkProxy proxy;
+                    proxy.setType(QNetworkProxy::HttpProxy);
+                    proxy.setHostName(proxyUrl.host());
+                    proxy.setPort(proxyUrl.port());
+                    manager->setProxy(proxy);
+                }
+            }
+
+            QUrl url(apiEndpoint);
+            QNetworkRequest request(url);
+            request.setHeader(QNetworkRequest::ContentTypeHeader,
+                              "application/json");
+            request.setRawHeader("Authorization",
+                                 "Bearer " + apiKey.toUtf8());
+
+            QJsonObject message;
+            message["role"]    = "user";
+            message["content"] = combined;
+            QJsonArray messagesArray;
+            messagesArray.append(message);
+            QJsonObject body;
+            body["model"]    = modelName;
+            body["messages"] = messagesArray;
+            QJsonDocument bodyDoc(body);
+
+            manager->post(request, bodyDoc.toJson());
+            connect(manager, &QNetworkAccessManager::finished, this,
+                    [this, task](QNetworkReply *reply) {
+                QByteArray respData = reply->readAll();
+                reply->deleteLater();
+                QJsonDocument respDoc = QJsonDocument::fromJson(respData);
+                if (!respDoc.isObject())
+                    return;
+                QJsonObject respObj = respDoc.object();
+                QJsonArray choices = respObj.value("choices").toArray();
+                if (choices.isEmpty())
+                    return;
+                QJsonObject msg = choices.first().toObject()
+                                      .value("message")
+                                      .toObject();
+                QString result = msg.value("content").toString();
+
+                if (task->insertMode()) {
+#ifdef Q_OS_WIN
+                    QClipboard *clipboard =
+                        QGuiApplication::clipboard();
+                    clipboard->setText(result);
+
+                    INPUT pasteInputs[4] = {};
+                    pasteInputs[0].type = INPUT_KEYBOARD;
+                    pasteInputs[0].ki.wVk = VK_CONTROL;
+                    pasteInputs[1].type = INPUT_KEYBOARD;
+                    pasteInputs[1].ki.wVk = 'V';
+                    pasteInputs[2].type = INPUT_KEYBOARD;
+                    pasteInputs[2].ki.wVk = 'V';
+                    pasteInputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+                    pasteInputs[3].type = INPUT_KEYBOARD;
+                    pasteInputs[3].ki.wVk = VK_CONTROL;
+                    pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+                    SendInput(4, pasteInputs, sizeof(INPUT));
 #endif
+                } else {
+                    auto *respWin = new QWidget;
+                    auto *lay     = new QVBoxLayout(respWin);
+                    auto *edit    = new QTextEdit(respWin);
+                    edit->setPlainText(result);
+                    edit->setReadOnly(true);
+                    lay->addWidget(edit);
+                    respWin->setWindowTitle(tr("Ответ LLM"));
+                    respWin->resize(600, 400);
+                    respWin->show();
+                }
+                this->deleteLater();
+            });
         });
         layout->addWidget(btn);
     }
@@ -100,7 +186,7 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     adjustSize();
 
     QPoint cursorPos = QCursor::pos();
-    QScreen *screen = QGuiApplication::screenAt(cursorPos);
+    QScreen *screen  = QGuiApplication::screenAt(cursorPos);
     if (!screen) {
         screen = QGuiApplication::primaryScreen();
     }
