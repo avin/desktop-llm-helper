@@ -23,6 +23,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QTextEdit>
+#include <QElapsedTimer>
+#include <QEventLoop>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -65,8 +67,12 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
         connect(btn, &QPushButton::clicked, this, [this, task]() {
             this->hide();
 
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            QString original;
+
 #ifdef Q_OS_WIN
-            Sleep(200);
+            // Очистить буфер, послать Ctrl+C и ждать обновления до 200 мс
+            clipboard->clear(QClipboard::Clipboard);
 
             INPUT copyInputs[4] = {};
             copyInputs[0].type = INPUT_KEYBOARD;
@@ -81,15 +87,27 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             copyInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(4, copyInputs, sizeof(INPUT));
 
-            Sleep(200);
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < 200) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                QString text = clipboard->text();
+                if (!text.isEmpty()) {
+                    original = text;
+                    break;
+                }
+            }
+            if (original.isEmpty())
+                return;
+#else
+            original = clipboard->text();
 #endif
 
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            QString original = clipboard->text();
             QString prompt = task->prompt();
             QString combined = prompt + original;
             clipboard->setText(combined);
 
+            // Загрузка конфигурации и отправка запроса
             QString configPath = QCoreApplication::applicationDirPath()
                                  + QDir::separator() + "config.json";
             QFile configFile(configPath);
