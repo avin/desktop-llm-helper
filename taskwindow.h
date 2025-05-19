@@ -5,9 +5,9 @@
 #include <QList>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QTimer>
 
 class TaskWidget;
-
 
 class TaskWindow : public QWidget {
     Q_OBJECT
@@ -17,8 +17,17 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent *ev) override;
-
     void changeEvent(QEvent *event) override;
+
+private slots:
+    void updateLoadingPosition();
+
+private:
+    QWidget *loadingWindow;
+    QTimer *loadingTimer;
+
+    void showLoadingIndicator();
+    void hideLoadingIndicator();
 };
 
 #endif // TASKWINDOW_H

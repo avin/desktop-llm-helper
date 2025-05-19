@@ -25,6 +25,8 @@
 #include <QTextEdit>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QTimer>
+#include <QLabel>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -33,7 +35,10 @@
 TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     : QWidget(parent,
               Qt::Window | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
-              | Qt::FramelessWindowHint) {
+              | Qt::FramelessWindowHint)
+    , loadingWindow(nullptr)
+    , loadingTimer(nullptr)
+{
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
@@ -66,14 +71,13 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
         auto *btn = new QPushButton(text, container);
         connect(btn, &QPushButton::clicked, this, [this, task]() {
             this->hide();
+            this->showLoadingIndicator();
 
             QClipboard *clipboard = QGuiApplication::clipboard();
             QString original;
 
 #ifdef Q_OS_WIN
-            // Очистить буфер, послать Ctrl+C и ждать обновления до 200 мс
             clipboard->clear(QClipboard::Clipboard);
-
             INPUT copyInputs[4] = {};
             copyInputs[0].type = INPUT_KEYBOARD;
             copyInputs[0].ki.wVk = VK_CONTROL;
@@ -107,7 +111,6 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             QString combined = prompt + original;
             clipboard->setText(combined);
 
-            // Загрузка конфигурации и отправка запроса
             QString configPath = QCoreApplication::applicationDirPath()
                                  + QDir::separator() + "config.json";
             QFile configFile(configPath);
@@ -165,6 +168,7 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             manager->post(request, bodyDoc.toJson());
             connect(manager, &QNetworkAccessManager::finished, this,
                     [this, task](QNetworkReply *reply) {
+                        this->hideLoadingIndicator();
                         QByteArray respData = reply->readAll();
                         reply->deleteLater();
                         QJsonDocument respDoc = QJsonDocument::fromJson(respData);
@@ -293,6 +297,46 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     raise();
     activateWindow();
     setFocus(Qt::OtherFocusReason);
+}
+
+void TaskWindow::showLoadingIndicator() {
+    if (loadingWindow)
+        return;
+    loadingWindow = new QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    loadingWindow->setAttribute(Qt::WA_ShowWithoutActivating);
+    loadingWindow->setAttribute(Qt::WA_TransparentForMouseEvents);
+    loadingWindow->setFocusPolicy(Qt::NoFocus);
+    QLabel *label = new QLabel(tr("Ожидание"), loadingWindow);
+    QVBoxLayout *lay = new QVBoxLayout(loadingWindow);
+    lay->setContentsMargins(5, 5, 5, 5);
+    lay->addWidget(label);
+    loadingWindow->setLayout(lay);
+    loadingWindow->adjustSize();
+    updateLoadingPosition();
+    loadingWindow->show();
+    loadingTimer = new QTimer(this);
+    connect(loadingTimer, &QTimer::timeout, this, &TaskWindow::updateLoadingPosition);
+    loadingTimer->start(16);
+}
+
+void TaskWindow::hideLoadingIndicator() {
+    if (loadingTimer) {
+        loadingTimer->stop();
+        loadingTimer->deleteLater();
+        loadingTimer = nullptr;
+    }
+    if (loadingWindow) {
+        loadingWindow->close();
+        loadingWindow->deleteLater();
+        loadingWindow = nullptr;
+    }
+}
+
+void TaskWindow::updateLoadingPosition() {
+    if (!loadingWindow)
+        return;
+    QPoint pos = QCursor::pos();
+    loadingWindow->move(pos.x() + 10, pos.y() + 10);
 }
 
 void TaskWindow::changeEvent(QEvent *event) {
