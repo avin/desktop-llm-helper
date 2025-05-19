@@ -226,6 +226,27 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
 
     adjustSize();
 
+    const int btnSize = 16;
+    auto *closeBtn = new QPushButton(QString::fromUtf8("×"), this);
+    closeBtn->setFixedSize(btnSize, btnSize);
+    closeBtn->setFlat(true);
+    closeBtn->setCursor(Qt::PointingHandCursor);
+    closeBtn->setStyleSheet("QPushButton { "
+                            "   background-color: #FFFFFF; "
+                            "   border: 1px solid #BBBBBB; "
+                            "   border-radius: 8px; "
+                            "   padding-bottom: 2px; "
+                            "} "
+                            "QPushButton:hover { "
+                            "   background-color: #e81123; "
+                            "   color: #FFFFFF; "
+                            "}");
+    int xBtn = width() - mainLayout->contentsMargins().right() - btnSize/2;
+    int yBtn = mainLayout->contentsMargins().top() - btnSize/2;
+    closeBtn->move(xBtn, yBtn);
+    closeBtn->raise();
+    connect(closeBtn, &QPushButton::clicked, this, &TaskWindow::close);
+
     QPoint cursorPos = QCursor::pos();
     QScreen *screen = QGuiApplication::screenAt(cursorPos);
     if (!screen) {
