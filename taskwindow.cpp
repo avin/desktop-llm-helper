@@ -27,6 +27,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QLabel>
+#include <QFont>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -211,12 +212,15 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
 
                             auto *lay = new QVBoxLayout(respWin);
                             auto *edit = new QTextEdit(respWin);
+                            QFont font = edit->font();
+                            font.setPointSize(12);
+                            edit->setFont(font);
                             edit->setPlainText(result);
                             edit->setReadOnly(true);
                             lay->addWidget(edit);
 
                             respWin->setWindowTitle(tr("Ответ LLM"));
-                            respWin->resize(600, 400);
+                            respWin->resize(600, 200);
 
                             QPoint cursorPos = QCursor::pos();
                             QScreen *screen = QGuiApplication::screenAt(cursorPos);
@@ -241,7 +245,6 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
                             respWin->raise();
                             respWin->activateWindow();
                         }
-                        this->deleteLater();
                     });
         });
         layout->addWidget(btn);
@@ -265,7 +268,7 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
                             "QPushButton:hover { "
                             "   background-color: #e81123; "
                             "   color: #FFFFFF; "
-                            "}"); 
+                            "}");
     int xBtn = width() - mainLayout->contentsMargins().right() - btnSize/2;
     int yBtn = mainLayout->contentsMargins().top() - btnSize/2;
     closeBtn->move(xBtn, yBtn);
