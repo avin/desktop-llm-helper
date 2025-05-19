@@ -66,6 +66,8 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             this->hide();
 
 #ifdef Q_OS_WIN
+            Sleep(50);
+
             INPUT copyInputs[4] = {};
             copyInputs[0].type = INPUT_KEYBOARD;
             copyInputs[0].ki.wVk = VK_CONTROL;
@@ -78,6 +80,8 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             copyInputs[3].ki.wVk = VK_CONTROL;
             copyInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(4, copyInputs, sizeof(INPUT));
+
+            Sleep(50);
 #endif
 
             QClipboard *clipboard = QGuiApplication::clipboard();
