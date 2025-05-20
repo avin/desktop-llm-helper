@@ -55,9 +55,9 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     auto *container = new QWidget(this);
     container->setObjectName("container");
     container->setStyleSheet("QWidget#container { "
-        "  background-color: white; "
-        "  border-radius: 0px; "
-        "}");
+                             "  background-color: white; "
+                             "  border-radius: 0; "
+                             "}");
 
     auto *shadow = new QGraphicsDropShadowEffect(container);
     shadow->setBlurRadius(10);
@@ -67,13 +67,25 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
 
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(2, 2, 2, 2);
-    layout->setSpacing(0);
+    layout->setSpacing(2);
 
     for (TaskWidget *task: tasks) {
         if (!task)
             continue;
         QString text = task->name().isEmpty() ? tr("<Без имени>") : task->name();
         auto *btn = new QPushButton(text, container);
+        btn->setStyleSheet(
+            "QPushButton {"
+            "   text-align: left;"
+            "   padding: 2px 8px;"
+            "   border: 1px solid #adadad;"
+            "   background-color: #e1e1e1;"
+            "}"
+            "QPushButton:focus {"
+            "   outline: 0;"
+            "   border: 1px solid #0078d7;"
+            "}"
+        );
         if (!firstButton)
             firstButton = btn;
         connect(btn, &QPushButton::clicked, this, [this, task]() {
@@ -263,15 +275,15 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     closeBtn->setFlat(true);
     closeBtn->setCursor(Qt::PointingHandCursor);
     closeBtn->setStyleSheet("QPushButton { "
-        "   background-color: #FFFFFF; "
-        "   border: 1px solid #BBBBBB; "
-        "   border-radius: 8px; "
-        "   padding-bottom: 2px; "
-        "} "
-        "QPushButton:hover { "
-        "   background-color: #e81123; "
-        "   color: #FFFFFF; "
-        "}");
+                            "   background-color: #FFFFFF; "
+                            "   border: 1px solid #BBBBBB; "
+                            "   border-radius: 8px; "
+                            "   padding-bottom: 2px; "
+                            "} "
+                            "QPushButton:hover { "
+                            "   background-color: #e81123; "
+                            "   color: #FFFFFF; "
+                            "}");
     int xBtn = width() - mainLayout->contentsMargins().right() - btnSize / 2;
     int yBtn = mainLayout->contentsMargins().top() - btnSize / 2;
     closeBtn->move(xBtn, yBtn);
