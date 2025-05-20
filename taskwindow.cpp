@@ -37,15 +37,16 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     : QWidget(parent,
               Qt::Window | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
               | Qt::FramelessWindowHint)
-    , loadingWindow(nullptr)
-    , loadingTimer(nullptr)
-    , loadingLabel(nullptr)
-    , animationTimer(nullptr)
-    , dotCount(0)
-{
+      , loadingWindow(nullptr)
+      , loadingTimer(nullptr)
+      , loadingLabel(nullptr)
+      , animationTimer(nullptr)
+      , dotCount(0) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
+
+    QPushButton *firstButton = nullptr;
 
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(10, 10, 10, 10);
@@ -73,6 +74,8 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             continue;
         QString text = task->name().isEmpty() ? tr("<Без имени>") : task->name();
         auto *btn = new QPushButton(text, container);
+        if (!firstButton)
+            firstButton = btn;
         connect(btn, &QPushButton::clicked, this, [this, task]() {
             this->hide();
             this->showLoadingIndicator();
@@ -260,17 +263,17 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     closeBtn->setFlat(true);
     closeBtn->setCursor(Qt::PointingHandCursor);
     closeBtn->setStyleSheet("QPushButton { "
-                            "   background-color: #FFFFFF; "
-                            "   border: 1px solid #BBBBBB; "
-                            "   border-radius: 8px; "
-                            "   padding-bottom: 2px; "
-                            "} "
-                            "QPushButton:hover { "
-                            "   background-color: #e81123; "
-                            "   color: #FFFFFF; "
-                            "}");
-    int xBtn = width() - mainLayout->contentsMargins().right() - btnSize/2;
-    int yBtn = mainLayout->contentsMargins().top() - btnSize/2;
+        "   background-color: #FFFFFF; "
+        "   border: 1px solid #BBBBBB; "
+        "   border-radius: 8px; "
+        "   padding-bottom: 2px; "
+        "} "
+        "QPushButton:hover { "
+        "   background-color: #e81123; "
+        "   color: #FFFFFF; "
+        "}");
+    int xBtn = width() - mainLayout->contentsMargins().right() - btnSize / 2;
+    int yBtn = mainLayout->contentsMargins().top() - btnSize / 2;
     closeBtn->move(xBtn, yBtn);
     closeBtn->raise();
     connect(closeBtn, &QPushButton::clicked, this, &TaskWindow::close);
@@ -303,13 +306,15 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     raise();
     activateWindow();
     setFocus(Qt::OtherFocusReason);
+    if (firstButton)
+        firstButton->setFocus(Qt::TabFocusReason);
 }
 
 void TaskWindow::showLoadingIndicator() {
     if (loadingWindow)
         return;
     loadingWindow = new QWidget(nullptr,
-        Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+                                Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     loadingWindow->setAttribute(Qt::WA_ShowWithoutActivating);
     loadingWindow->setAttribute(Qt::WA_TransparentForMouseEvents);
     loadingWindow->setFocusPolicy(Qt::NoFocus);
