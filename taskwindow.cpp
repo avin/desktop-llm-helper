@@ -84,8 +84,11 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             "QPushButton:focus {"
             "   outline: 0;"
             "   border: 1px solid #0078d7;"
+            "   background-color: #e5f1fb;"
             "}"
         );
+        btn->setMouseTracking(true);
+        btn->installEventFilter(this);
         if (!firstButton)
             firstButton = btn;
         connect(btn, &QPushButton::clicked, this, [this, task]() {
@@ -320,6 +323,15 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     setFocus(Qt::OtherFocusReason);
     if (firstButton)
         firstButton->setFocus(Qt::TabFocusReason);
+}
+
+bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::Enter) {
+        if (auto *btn = qobject_cast<QPushButton *>(watched)) {
+            btn->setFocus(Qt::MouseFocusReason);
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void TaskWindow::showLoadingIndicator() {

@@ -19,6 +19,7 @@ public:
 protected:
     void keyPressEvent(QKeyEvent *ev) override;
     void changeEvent(QEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void updateLoadingPosition();
