@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(TextHelper VERSION 0.1 LANGUAGES CXX)
+project(DesktopLLMHelper VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
@@ -32,7 +32,7 @@ set(app_icon_resource_windows "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc")
 set(main_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/resources.qrc")
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-    qt_add_executable(TextHelper
+    qt_add_executable(DesktopLLMHelper
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         ${app_icon_resource_windows}
@@ -40,19 +40,19 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     )
 else()
     if(ANDROID)
-        add_library(TextHelper SHARED
+        add_library(DesktopLLMHelper SHARED
             ${PROJECT_SOURCES}
             ${main_resources}
         )
     else()
-        add_executable(TextHelper
+        add_executable(DesktopLLMHelper
             ${PROJECT_SOURCES}
             ${main_resources}
         )
     endif()
 endif()
 
-target_link_libraries(TextHelper 
+target_link_libraries(DesktopLLMHelper
     PRIVATE 
         Qt${QT_VERSION_MAJOR}::Widgets 
         Qt${QT_VERSION_MAJOR}::Network 
@@ -60,9 +60,9 @@ target_link_libraries(TextHelper
 )
 
 if(${QT_VERSION} VERSION_LESS 6.1.0)
-  set(BUNDLE_ID_OPTION MACOSX_BUNDLE_GUI_IDENTIFIER com.example.TextHelper)
+  set(BUNDLE_ID_OPTION MACOSX_BUNDLE_GUI_IDENTIFIER com.example.DesktopLLMHelper)
 endif()
-set_target_properties(TextHelper PROPERTIES
+set_target_properties(DesktopLLMHelper PROPERTIES
     ${BUNDLE_ID_OPTION}
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
@@ -71,12 +71,12 @@ set_target_properties(TextHelper PROPERTIES
 )
 
 include(GNUInstallDirs)
-install(TARGETS TextHelper
+install(TARGETS DesktopLLMHelper
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 if(QT_VERSION_MAJOR EQUAL 6)
-    qt_finalize_executable(TextHelper)
+    qt_finalize_executable(DesktopLLMHelper)
 endif()

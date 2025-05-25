@@ -1,4 +1,4 @@
-# Windows-LLM-Helper
+# Desktop-LLM-Helper
 
 The application allows you to quickly process any selected text using pre-configured tasks.
 
