@@ -18,6 +18,14 @@ Component.prototype.launchApplication = function()
 
 Component.prototype.createOperations = function()
 {
+    // Stop running instance of the application before copying files
+    if (systemInfo.productType === "windows") {
+        try {
+            installer.execute("taskkill", ["/F", "/IM", "DesktopLLMHelper.exe"]);
+        } catch(e) {
+            console.log("Failed to terminate running DesktopLLMHelper: " + e);
+        }
+    }
     // perform the default file-install operations
     component.createOperations();
 
