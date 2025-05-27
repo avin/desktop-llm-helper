@@ -326,6 +326,15 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
 }
 
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent*>(event);
+        if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
+            && qobject_cast<QPushButton*>(watched)) {
+            auto *btn = qobject_cast<QPushButton*>(watched);
+            btn->click();
+            return true;
+        }
+    }
     if (event->type() == QEvent::Enter) {
         if (auto *btn = qobject_cast<QPushButton *>(watched)) {
             btn->setFocus(Qt::MouseFocusReason);
