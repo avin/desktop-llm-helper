@@ -125,8 +125,10 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
                     break;
                 }
             }
-            if (original.isEmpty())
+            if (original.isEmpty()) {
+                hideLoadingIndicator();
                 return;
+            }
 #else
             original = clipboard->text();
 #endif
