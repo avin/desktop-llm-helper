@@ -7,6 +7,7 @@
     <StartMenuDir>DesktopLLMHelper</StartMenuDir>
     <!-- Install into the per-user Programs folder under LocalAppData -->
     <TargetDir>@HomeDir@/AppData/Local/Programs/DesktopLLMHelper</TargetDir>
+    <RemoveTargetDir>false</RemoveTargetDir>
     <RemoteRepositories>
         <!-- Add repository URLs here if you host packages remotely -->
     </RemoteRepositories>
