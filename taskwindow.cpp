@@ -1,3 +1,4 @@
+#include <QMessageBox>
 #include "taskwindow.h"
 #include "taskwidget.h"
 
@@ -191,6 +192,17 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
             connect(manager, &QNetworkAccessManager::finished, this,
                     [this, task](QNetworkReply *reply) {
                         this->hideLoadingIndicator();
+                        if (reply->error() != QNetworkReply::NoError) {
+                            QString errStr = reply->errorString();
+                            int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                            QMessageBox::critical(this,
+                                tr("Error"),
+                                tr("LLM request failed (%1): HTTP status %2")
+                                    .arg(errStr)
+                                    .arg(statusCode));
+                            reply->deleteLater();
+                            return;
+                        }
                         QByteArray respData = reply->readAll();
                         reply->deleteLater();
                         QJsonDocument respDoc = QJsonDocument::fromJson(respData);
