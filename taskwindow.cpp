@@ -697,11 +697,13 @@ void TaskWindow::ensureResponseWindow() {
     input->setPlaceholderText(tr("Type a follow-up message"));
     const QColor borderColor = responseView->palette().color(QPalette::Mid);
     input->setStyleSheet(
-        QString("QPlainTextEdit { background-color: #ffffff; border: 1px solid %1; padding: 4px; }")
+        QString("QPlainTextEdit { background-color: #ffffff; border: 1px solid %1; padding: 4px; } "
+                "QPlainTextEdit:disabled { background-color: #f0f0f0; }")
             .arg(borderColor.name())
     );
     input->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    input->setFocusPolicy(Qt::StrongFocus);
     input->installEventFilter(this);
     followUpInput = input;
     connect(input, &QPlainTextEdit::textChanged, this, [this]() {
@@ -899,6 +901,14 @@ void TaskWindow::setRequestInFlight(bool inFlight) {
     requestInFlight = inFlight;
     if (followUpInput)
         followUpInput->setEnabled(!inFlight);
+    if (!inFlight && followUpInput && responseWindow && responseWindow->isVisible()) {
+        responseWindow->raise();
+        responseWindow->activateWindow();
+        QTimer::singleShot(0, this, [this]() {
+            if (followUpInput)
+                followUpInput->setFocus(Qt::OtherFocusReason);
+        });
+    }
 }
 
 QString TaskWindow::parseStreamDelta(const QByteArray &line) {
