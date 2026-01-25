@@ -37,11 +37,7 @@ public:
     void applyDefinition(const TaskDefinition &definition);
 
 signals:
-    void removeRequested(TaskWidget *task);
     void configChanged();
-
-private slots:
-    void on_pushButtonDelete_clicked();
 
 private:
     Ui::TaskWidget *ui;

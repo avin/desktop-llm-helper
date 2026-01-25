@@ -15,6 +15,7 @@
 #include <QStyleOptionTab>
 #include <QStylePainter>
 #include <QFontMetrics>
+#include <QMouseEvent>
 #include <QMenu>
 #include <QAction>
 #include <QSystemTrayIcon>
@@ -22,6 +23,9 @@
 #include <QCloseEvent>
 #include <QApplication>
 #include <QVariant>
+#include <QMessageBox>
+
+#include <functional>
 
 #include <windows.h>
 
@@ -33,7 +37,15 @@ constexpr const char kAddTabMarker[] = "add_tab";
 class TaskTabBar : public QTabBar {
 public:
     explicit TaskTabBar(QWidget *parent = nullptr)
-        : QTabBar(parent) {}
+        : QTabBar(parent) {
+        setMouseTracking(true);
+    }
+
+    using CloseHandler = std::function<void(int)>;
+
+    void setCloseRequestHandler(CloseHandler handler) {
+        closeRequestHandler = std::move(handler);
+    }
 
     QSize tabSizeHint(int index) const override {
         QStyleOptionTab opt;
@@ -47,6 +59,8 @@ public:
         int width = textSize.width() + iconSize.width();
         if (!opt.icon.isNull() && !opt.text.isEmpty())
             width += fm.horizontalAdvance(QLatin1Char(' '));
+        if (hasCloseButton(index))
+            width += closeButtonSide(opt) + closeButtonPadding();
         width += hspace;
         int height = qMax(textSize.height(), iconSize.height()) + vspace;
         return QSize(width, height);
@@ -66,6 +80,14 @@ protected:
             int vspace = style()->pixelMetric(QStyle::PM_TabBarTabVSpace, &opt, this) / 2;
             textRect.adjust(hspace, vspace, -hspace, -vspace);
 
+            QRect closeRect;
+            if (hasCloseButton(i)) {
+                closeRect = closeRectForTab(i, opt);
+                int rightLimit = closeRect.left() - 4;
+                if (rightLimit > textRect.left())
+                    textRect.setRight(rightLimit);
+            }
+
             if (!opt.icon.isNull()) {
                 QSize iconSize = opt.iconSize.isValid() ? opt.iconSize : QSize(16, 16);
                 QRect iconRect = textRect;
@@ -84,7 +106,114 @@ protected:
                 textAlign = Qt::AlignCenter;
             style()->drawItemText(&painter, textRect, textAlign, opt.palette,
                                   opt.state & QStyle::State_Enabled, opt.text, QPalette::WindowText);
+
+            if (shouldShowClose(i))
+                drawCloseButton(painter, opt, closeRect);
         }
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override {
+        int index = tabAt(event->pos());
+        if (index != hoverIndex) {
+            hoverIndex = index;
+            update();
+        }
+        QTabBar::mouseMoveEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override {
+        hoverIndex = -1;
+        pressIndex = -1;
+        update();
+        QTabBar::leaveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            int index = tabAt(event->pos());
+            if (shouldShowClose(index)) {
+                QStyleOptionTab opt;
+                initStyleOption(&opt, index);
+                QRect closeRect = closeRectForTab(index, opt);
+                if (closeRect.contains(event->pos())) {
+                    pressIndex = index;
+                    update();
+                    event->accept();
+                    return;
+                }
+            }
+        }
+        QTabBar::mousePressEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton && pressIndex != -1) {
+            int index = pressIndex;
+            pressIndex = -1;
+            QStyleOptionTab opt;
+            initStyleOption(&opt, index);
+            QRect closeRect = closeRectForTab(index, opt);
+            bool shouldClose = (tabAt(event->pos()) == index) && closeRect.contains(event->pos());
+            update();
+            if (shouldClose && closeRequestHandler) {
+                closeRequestHandler(index);
+                event->accept();
+                return;
+            }
+        }
+        QTabBar::mouseReleaseEvent(event);
+    }
+
+private:
+    CloseHandler closeRequestHandler;
+    int hoverIndex = -1;
+    int pressIndex = -1;
+
+    bool isAddTab(int index) const {
+        if (index < 0 || index >= count())
+            return false;
+        return tabData(index).toString() == QLatin1String(kAddTabMarker);
+    }
+
+    bool hasCloseButton(int index) const {
+        return index >= 0 && index < count() && !isAddTab(index);
+    }
+
+    bool shouldShowClose(int index) const {
+        return hasCloseButton(index) && (index == hoverIndex || index == pressIndex);
+    }
+
+    int closeButtonSide(const QStyleOptionTab &opt) const {
+        return qMax(10, opt.fontMetrics.height() - 2);
+    }
+
+    int closeButtonPadding() const {
+        return 6;
+    }
+
+    QRect closeRectForTab(int index, const QStyleOptionTab &opt) const {
+        QRect rect = tabRect(index);
+        int side = closeButtonSide(opt);
+        int padding = closeButtonPadding();
+        int x = rect.right() - padding - side;
+        int y = rect.center().y() - (side / 2);
+        return QRect(x, y, side, side);
+    }
+
+    void drawCloseButton(QStylePainter &painter, const QStyleOptionTab &opt, QRect rect) const {
+        if (!rect.isValid())
+            return;
+        int inset = qMax(2, rect.width() / 4);
+        rect.adjust(inset, inset, -inset, -inset);
+        QPen pen(opt.palette.color(QPalette::WindowText));
+        pen.setWidth(1);
+        pen.setCapStyle(Qt::RoundCap);
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(pen);
+        painter.drawLine(rect.topLeft(), rect.bottomRight());
+        painter.drawLine(rect.topRight(), rect.bottomLeft());
+        painter.restore();
     }
 };
 
@@ -240,6 +369,10 @@ MainWindow::MainWindow(QWidget *parent)
     ui->tasksTabWidget->setTabPosition(QTabWidget::West);
     ui->tasksTabWidget->tabBar()->setExpanding(false);
     ui->tasksTabWidget->setMovable(true);
+    auto *taskTabBar = static_cast<TaskTabBar *>(ui->tasksTabWidget->tabBar());
+    taskTabBar->setCloseRequestHandler([this](int index) {
+        requestCloseTask(index);
+    });
     connect(ui->tasksTabWidget->tabBar(), &QTabBar::tabMoved,
             this, &MainWindow::handleTaskTabMoved);
     connect(ui->tasksTabWidget->tabBar(), &QTabBar::tabBarClicked,
@@ -355,6 +488,29 @@ void MainWindow::handleTaskTabMoved(int, int) {
     saveConfig();
 }
 
+void MainWindow::requestCloseTask(int index) {
+    if (isAddTabIndex(index))
+        return;
+
+    auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(index));
+    if (!task)
+        return;
+
+    QString name = task->name().trimmed();
+    QString title = tr("Remove Task");
+    QString message = name.isEmpty()
+        ? tr("Do you want to remove this task?")
+        : tr("Do you want to remove \"%1\"?").arg(name);
+
+    if (QMessageBox::question(this, title, message,
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
+    removeTaskWidget(task);
+}
+
 void MainWindow::removeTaskWidget(TaskWidget *task) {
     int index = ui->tasksTabWidget->indexOf(task);
     if (index != -1) {
@@ -437,7 +593,6 @@ void MainWindow::addTaskTab(const TaskDefinition &definition, bool makeCurrent) 
 }
 
 void MainWindow::connectTaskSignals(TaskWidget *task) {
-    connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
     connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
     connect(task, &TaskWidget::configChanged, this, [this, task]() {
         updateTaskTabTitle(task);
@@ -487,6 +642,7 @@ void MainWindow::ensureAddTab() {
     QTabBar *bar = ui->tasksTabWidget->tabBar();
     bar->setTabData(index, QLatin1String(kAddTabMarker));
     bar->setTabToolTip(index, tr("Add Task"));
+    bar->updateGeometry();
     ensureAddTabLast();
 }
 

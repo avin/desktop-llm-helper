@@ -41,6 +41,7 @@ private slots:
     void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
     void handleTaskTabClicked(int index);
     void handleTaskTabMoved(int from, int to);
+    void requestCloseTask(int index);
     void removeTaskWidget(TaskWidget *task);
     void updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom);
     void commitTaskResponsePrefs();

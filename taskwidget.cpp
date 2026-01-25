@@ -28,10 +28,6 @@ TaskWidget::~TaskWidget() {
     delete ui;
 }
 
-void TaskWidget::on_pushButtonDelete_clicked() {
-    emit removeRequested(this);
-}
-
 QString TaskWidget::name() const {
     return ui->lineEditName->text();
 }
