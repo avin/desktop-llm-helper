@@ -435,27 +435,6 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
 
     adjustSize();
 
-    const int btnSize = 16;
-    auto *closeBtn = new QPushButton(QString::fromUtf8("\xC3\x97"), this);
-    closeBtn->setFixedSize(btnSize, btnSize);
-    closeBtn->setFlat(true);
-    closeBtn->setStyleSheet("QPushButton { "
-                            "   background-color: #FFFFFF; "
-                            "   border: 1px solid #BBBBBB; "
-                            "   border-radius: 8px; "
-                            "   padding-bottom: 2px; "
-                            "} "
-                            "QPushButton:hover, QPushButton:focus { "
-                            "   background-color: #e81123; "
-                            "   color: #FFFFFF; "
-                            "   outline: 0; "
-                            "}");
-    int xBtn = width() - mainLayout->contentsMargins().right() - btnSize / 2;
-    int yBtn = mainLayout->contentsMargins().top() - btnSize / 2;
-    closeBtn->move(xBtn, yBtn);
-    closeBtn->raise();
-    connect(closeBtn, &QPushButton::clicked, this, &TaskWindow::close);
-
     const QPoint cursorPos = QCursor::pos();
     moveNearCursor(this, cursorPos);
 
