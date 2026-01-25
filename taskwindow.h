@@ -16,6 +16,12 @@ class QNetworkAccessManager;
 class QNetworkReply;
 class QTextBrowser;
 class QDialog;
+class QPlainTextEdit;
+
+struct ChatMessage {
+    QString role;
+    QString content;
+};
 
 class TaskWindow : public QWidget {
     Q_OBJECT
@@ -38,6 +44,7 @@ protected:
 private slots:
     void updateLoadingPosition();
     void animateLoadingText();
+    void sendFollowUpMessage();
 
 private:
     QList<TaskDefinition> tasks;
@@ -52,22 +59,34 @@ private:
 
     QPointer<QDialog> responseWindow;
     QPointer<QTextBrowser> responseView;
+    QPointer<QPlainTextEdit> followUpInput;
     QByteArray responseBody;
     QByteArray streamBuffer;
-    QString responseText;
+    QString transcriptText;
+    QString pendingResponseText;
+    QList<ChatMessage> messageHistory;
     bool sawStreamFormat;
+    bool requestInFlight;
 
     QString captureSelectedText();
     QString applyCharLimit(const QString &text) const;
-    void sendRequest(const TaskDefinition &task, const QString &originalText);
+    void startConversation(const TaskDefinition &task, const QString &originalText);
+    void sendRequestWithHistory(const TaskDefinition &task);
     void handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply);
     void handleReplyFinished(const TaskDefinition &task, QNetworkReply *reply);
     void insertResponse(const QString &text);
     void ensureResponseWindow();
     void updateResponseView();
     void applyMarkdownStyles();
+    void updateFollowUpHeight();
+    void appendMessageToHistory(const QString &role, const QString &content);
+    void appendTranscriptBlock(const QString &markdown);
+    QString formatUserMessageBlock(const QString &text) const;
+    QString buildDisplayMarkdown() const;
     QString extractResponseTextFromJson(const QByteArray &data) const;
-    void resetResponseState();
+    void resetRequestState();
+    void resetConversationState();
+    void setRequestInFlight(bool inFlight);
     QString parseStreamDelta(const QByteArray &line);
     void applyResponsePrefs();
     void handleResponseResize(const QSize &size);

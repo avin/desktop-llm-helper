@@ -1,6 +1,7 @@
 #include "taskwindow.h"
 
 #include <QClipboard>
+#include <QAbstractTextDocumentLayout>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
@@ -8,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFont>
+#include <QFontMetrics>
 #include <QGraphicsDropShadowEffect>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -20,6 +22,7 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPalette>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
@@ -33,9 +36,11 @@
 #include <QTextFormat>
 #include <QTextCursor>
 #include <QTextFragment>
+#include <QTextLayout>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QPlainTextEdit>
 
 #include <functional>
 
@@ -307,7 +312,14 @@ const QString &markdownCss() {
         "h3 { font-size: 14pt; }"
         "ul, ol { margin-left: 20px; }"
         "pre { border: 1px solid #d0d7de; padding: 8px; margin: 12px 0; }"
-        "blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin: 8px 0; padding-left: 8px; }"
+        "blockquote {"
+        "  color: #24292f;"
+        "  border-left: 4px solid #9ec5fe;"
+        "  background-color: #f2f7ff;"
+        "  margin: 8px 0;"
+        "  padding: 6px 10px;"
+        "  border-radius: 4px;"
+        "}"
         "table { border-collapse: collapse; }"
         "th, td { border: 1px solid #d0d7de; padding: 4px 8px; }"
         "hr { border: 0; border-top: 1px solid #d0d7de; margin: 12px 0; }";
@@ -332,7 +344,9 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , dotCount(0)
     , responseWindow(nullptr)
     , responseView(nullptr)
-    , sawStreamFormat(false) {
+    , followUpInput(nullptr)
+    , sawStreamFormat(false)
+    , requestInFlight(false) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
@@ -407,7 +421,7 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
             const TaskDefinition task = tasks.at(i);
             clipboard->setText(task.prompt + original);
 
-            sendRequest(task, original);
+            startConversation(task, original);
         });
         layout->addWidget(btn);
     }
@@ -485,23 +499,28 @@ QString TaskWindow::applyCharLimit(const QString &text) const {
     return text;
 }
 
-void TaskWindow::sendRequest(const TaskDefinition &task, const QString &originalText) {
-    resetResponseState();
-    const QString sendText = applyCharLimit(originalText);
+void TaskWindow::startConversation(const TaskDefinition &task, const QString &originalText) {
+    resetConversationState();
+    appendMessageToHistory("system", task.prompt);
+    appendMessageToHistory("user", applyCharLimit(originalText));
+    sendRequestWithHistory(task);
+}
+
+void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
+    resetRequestState();
+    setRequestInFlight(true);
 
     QNetworkRequest request(QUrl(settings.apiEndpoint));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", "Bearer " + settings.apiKey.toUtf8());
 
-    QJsonObject systemMessage;
-    systemMessage["role"] = "system";
-    systemMessage["content"] = task.prompt;
-    QJsonObject userMessage;
-    userMessage["role"] = "user";
-    userMessage["content"] = sendText;
     QJsonArray messagesArray;
-    messagesArray.append(systemMessage);
-    messagesArray.append(userMessage);
+    for (const ChatMessage &msg : messageHistory) {
+        QJsonObject item;
+        item["role"] = msg.role;
+        item["content"] = msg.content;
+        messagesArray.append(item);
+    }
 
     QJsonObject body;
     body["model"] = settings.modelName;
@@ -521,6 +540,27 @@ void TaskWindow::sendRequest(const TaskDefinition &task, const QString &original
     });
 }
 
+void TaskWindow::sendFollowUpMessage() {
+    if (requestInFlight || !followUpInput)
+        return;
+    if (activeTaskIndex < 0 || activeTaskIndex >= tasks.size())
+        return;
+
+    const QString rawText = followUpInput->toPlainText();
+    const QString trimmed = rawText.trimmed();
+    if (trimmed.isEmpty())
+        return;
+
+    const QString sendText = applyCharLimit(trimmed);
+    appendMessageToHistory("user", sendText);
+    appendTranscriptBlock(formatUserMessageBlock(sendText));
+    followUpInput->clear();
+    updateResponseView();
+
+    showLoadingIndicator();
+    sendRequestWithHistory(tasks.at(activeTaskIndex));
+}
+
 void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply) {
     const QByteArray chunk = reply->readAll();
     if (chunk.isEmpty())
@@ -538,7 +578,7 @@ void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply 
         streamBuffer.remove(0, lineEnd + 1);
         const QString delta = parseStreamDelta(line);
         if (!delta.isEmpty()) {
-            responseText += delta;
+            pendingResponseText += delta;
             appended = true;
         }
     }
@@ -559,7 +599,7 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
     if (!streamBuffer.isEmpty()) {
         const QString delta = parseStreamDelta(streamBuffer);
         if (!delta.isEmpty())
-            responseText += delta;
+            pendingResponseText += delta;
         streamBuffer.clear();
     }
 
@@ -572,25 +612,36 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
                                   .arg(errStr)
                                   .arg(statusCode));
         reply->deleteLater();
+        setRequestInFlight(false);
         return;
     }
 
-    if (!sawStreamFormat && responseText.isEmpty()) {
-        responseText = extractResponseTextFromJson(responseBody);
+    if (!sawStreamFormat && pendingResponseText.isEmpty()) {
+        pendingResponseText = extractResponseTextFromJson(responseBody);
     }
 
     reply->deleteLater();
 
+    if (!pendingResponseText.isEmpty())
+        appendMessageToHistory("assistant", pendingResponseText);
+
     if (task.insertMode) {
-        if (!responseText.isEmpty())
-            insertResponse(responseText);
+        if (!pendingResponseText.isEmpty())
+            insertResponse(pendingResponseText);
+        pendingResponseText.clear();
+        setRequestInFlight(false);
         return;
     }
 
-    if (responseWindow || !responseText.isEmpty()) {
+    if (responseWindow || !pendingResponseText.isEmpty()) {
         ensureResponseWindow();
+        if (!pendingResponseText.isEmpty()) {
+            appendTranscriptBlock(pendingResponseText);
+            pendingResponseText.clear();
+        }
         updateResponseView();
     }
+    setRequestInFlight(false);
 }
 
 void TaskWindow::insertResponse(const QString &text) {
@@ -642,6 +693,31 @@ void TaskWindow::ensureResponseWindow() {
     });
     lay->addWidget(view);
 
+    auto *input = new QPlainTextEdit(responseWindow);
+    input->setPlaceholderText(tr("Type a follow-up message"));
+    const QColor borderColor = responseView->palette().color(QPalette::Mid);
+    input->setStyleSheet(
+        QString("QPlainTextEdit { background-color: #ffffff; border: 1px solid %1; padding: 4px; }")
+            .arg(borderColor.name())
+    );
+    input->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    input->installEventFilter(this);
+    followUpInput = input;
+    connect(input, &QPlainTextEdit::textChanged, this, [this]() {
+        QTimer::singleShot(0, this, &TaskWindow::updateFollowUpHeight);
+    });
+    if (input->document() && input->document()->documentLayout()) {
+        connect(input->document()->documentLayout(),
+                &QAbstractTextDocumentLayout::documentSizeChanged,
+                this,
+                [this](const QSizeF &) { updateFollowUpHeight(); });
+    }
+    updateFollowUpHeight();
+
+    lay->addWidget(input);
+    setRequestInFlight(requestInFlight);
+
     responseWindow->setWindowTitle(tr("LLM Response"));
     applyResponsePrefs();
 
@@ -658,7 +734,8 @@ void TaskWindow::updateResponseView() {
         return;
     QScrollBar *bar = responseView->verticalScrollBar();
     const bool atBottom = bar && bar->value() >= bar->maximum();
-    responseView->document()->setMarkdown(responseText, QTextDocument::MarkdownDialectGitHub);
+    const QString displayText = buildDisplayMarkdown();
+    responseView->document()->setMarkdown(displayText, QTextDocument::MarkdownDialectGitHub);
     applyMarkdownStyles();
     if (atBottom)
         bar->setValue(bar->maximum());
@@ -717,6 +794,74 @@ void TaskWindow::applyMarkdownStyles() {
     }
 }
 
+void TaskWindow::updateFollowUpHeight() {
+    if (!followUpInput)
+        return;
+    QTextDocument *doc = followUpInput->document();
+    if (!doc)
+        return;
+    const int maxLines = 5;
+    int visualLines = 0;
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        QTextLayout *layout = block.layout();
+        if (layout)
+            visualLines += qMax(1, layout->lineCount());
+        else
+            visualLines += 1;
+    }
+    if (visualLines < 1)
+        visualLines = 1;
+    if (visualLines > maxLines)
+        visualLines = maxLines;
+
+    const int lineHeight = QFontMetrics(followUpInput->font()).lineSpacing();
+    const int frame = followUpInput->frameWidth();
+    const int docMargin = qRound(doc->documentMargin());
+    const int verticalPadding = frame * 2 + docMargin * 2 + 4;
+    const int targetHeight = lineHeight * visualLines + verticalPadding;
+    if (followUpInput->height() != targetHeight) {
+        followUpInput->setFixedHeight(targetHeight);
+        followUpInput->updateGeometry();
+    }
+}
+
+void TaskWindow::appendMessageToHistory(const QString &role, const QString &content) {
+    if (content.trimmed().isEmpty())
+        return;
+    messageHistory.append({role, content});
+}
+
+void TaskWindow::appendTranscriptBlock(const QString &markdown) {
+    if (markdown.trimmed().isEmpty())
+        return;
+    if (!transcriptText.isEmpty() && !transcriptText.endsWith("\n\n"))
+        transcriptText += "\n\n";
+    transcriptText += markdown;
+}
+
+QString TaskWindow::formatUserMessageBlock(const QString &text) const {
+    QString normalized = text;
+    normalized.replace("\r\n", "\n");
+    normalized.replace("\r", "\n");
+    const QStringList lines = normalized.split('\n');
+
+    QString block = "> **You**\n";
+    block += ">\n";
+    for (const QString &line : lines)
+        block += "> " + line + "\n";
+    return block;
+}
+
+QString TaskWindow::buildDisplayMarkdown() const {
+    QString displayText = transcriptText;
+    if (!pendingResponseText.isEmpty()) {
+        if (!displayText.isEmpty() && !displayText.endsWith("\n\n"))
+            displayText += "\n\n";
+        displayText += pendingResponseText;
+    }
+    return displayText;
+}
+
 QString TaskWindow::extractResponseTextFromJson(const QByteArray &data) const {
     const QJsonDocument respDoc = QJsonDocument::fromJson(data);
     if (!respDoc.isObject())
@@ -731,13 +876,29 @@ QString TaskWindow::extractResponseTextFromJson(const QByteArray &data) const {
     return msg.value("content").toString();
 }
 
-void TaskWindow::resetResponseState() {
+void TaskWindow::resetRequestState() {
     responseBody.clear();
     streamBuffer.clear();
-    responseText.clear();
+    pendingResponseText.clear();
     sawStreamFormat = false;
-    responseWindow = nullptr;
-    responseView = nullptr;
+}
+
+void TaskWindow::resetConversationState() {
+    messageHistory.clear();
+    transcriptText.clear();
+    pendingResponseText.clear();
+    resetRequestState();
+    setRequestInFlight(false);
+    if (followUpInput)
+        followUpInput->clear();
+    if (responseView)
+        responseView->clear();
+}
+
+void TaskWindow::setRequestInFlight(bool inFlight) {
+    requestInFlight = inFlight;
+    if (followUpInput)
+        followUpInput->setEnabled(!inFlight);
 }
 
 QString TaskWindow::parseStreamDelta(const QByteArray &line) {
@@ -822,6 +983,17 @@ void TaskWindow::handleResponseZoomDelta(int steps) {
 }
 
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (followUpInput && watched == followUpInput.data()) {
+        if (event->type() == QEvent::KeyPress) {
+            auto *keyEvent = static_cast<QKeyEvent*>(event);
+            if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+                if (keyEvent->modifiers().testFlag(Qt::ShiftModifier))
+                    return false;
+                sendFollowUpMessage();
+                return true;
+            }
+        }
+    }
     if (responseWindow && watched == responseWindow.data()
         && event->type() == QEvent::Close) {
         emit taskResponsePrefsCommitRequested();
