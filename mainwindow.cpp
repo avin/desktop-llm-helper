@@ -4,7 +4,9 @@
 #include "taskwindow.h"
 #include "hotkeymanager.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QJsonDocument>
 #include <QCoreApplication>
 #include <QLineEdit>
@@ -31,9 +33,9 @@
 #include <QNetworkRequest>
 #include <QNetworkProxy>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalBlocker>
+#include <QStandardPaths>
 #include <QUrl>
 
 #include <functional>
@@ -489,6 +491,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->lineEditMaxChars, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->toolButtonRefreshModels, &QToolButton::clicked,
             this, &MainWindow::requestModelList);
+    connect(ui->pushButtonExportSettings, &QPushButton::clicked,
+            this, &MainWindow::exportSettings);
+    connect(ui->pushButtonImportSettings, &QPushButton::clicked,
+            this, &MainWindow::importSettings);
 
     ui->lineEditHotkey->installEventFilter(this);
 
@@ -540,26 +546,20 @@ void MainWindow::applyDefaultSettings() {
 
 void MainWindow::loadConfig() {
     const QString path = ConfigStore::configFilePath();
-    QFile file(path);
-    if (!file.exists()) {
+    if (!QFile::exists(path)) {
         loadingConfig = true;
         applyDefaultSettings();
         loadingConfig = false;
         saveConfig();
         return;
     }
-    if (!file.open(QIODevice::ReadOnly))
+
+    AppConfig config;
+    if (!ConfigStore::loadFromFile(path, &config))
         return;
 
     loadingConfig = true;
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    file.close();
-
-    bool ok = false;
-    const AppConfig config = ConfigStore::fromJson(doc, &ok);
-    if (ok)
-        applyConfig(config);
-
+    applyConfig(config);
     loadingConfig = false;
 }
 
@@ -568,14 +568,58 @@ void MainWindow::saveConfig() {
         return;
 
     const AppConfig config = buildConfigFromUi();
-    const QJsonDocument doc = ConfigStore::toJson(config);
-    QFile file(ConfigStore::configFilePath());
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.write(doc.toJson());
-        file.close();
-    }
+    ConfigStore::saveToFile(ConfigStore::configFilePath(), config);
 
     hotkeyManager->registerHotkey(config.settings.hotkey);
+}
+
+QString MainWindow::suggestedSettingsPath() const {
+    QString baseDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (baseDir.isEmpty())
+        baseDir = QDir::homePath();
+    return QDir(baseDir).filePath("DesktopLLMHelper_settings.json");
+}
+
+void MainWindow::exportSettings() {
+    const QString filter = tr("JSON Files (*.json)");
+    const QString path = QFileDialog::getSaveFileName(
+        this,
+        tr("Export Settings"),
+        suggestedSettingsPath(),
+        filter
+    );
+    if (path.isEmpty())
+        return;
+
+    const AppConfig config = buildConfigFromUi();
+    if (!ConfigStore::saveToFile(path, config)) {
+        QMessageBox::warning(this, tr("Export Settings"),
+                             tr("Failed to export settings."));
+    }
+}
+
+void MainWindow::importSettings() {
+    const QString filter = tr("JSON Files (*.json);;All Files (*)");
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("Import Settings"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        filter
+    );
+    if (path.isEmpty())
+        return;
+
+    AppConfig config;
+    if (!ConfigStore::loadFromFile(path, &config)) {
+        QMessageBox::warning(this, tr("Import Settings"),
+                             tr("Failed to import settings."));
+        return;
+    }
+
+    loadingConfig = true;
+    applyConfig(config);
+    loadingConfig = false;
+    saveConfig();
 }
 
 void MainWindow::handleTaskTabClicked(int index) {

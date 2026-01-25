@@ -48,6 +48,8 @@ private slots:
     void updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom);
     void commitTaskResponsePrefs();
     void requestModelList();
+    void exportSettings();
+    void importSettings();
 
 private:
     Ui::MainWindow *ui;
@@ -79,6 +81,7 @@ private:
     void updateModelCombos(const QString &defaultModel);
     void setModelRefreshEnabled(bool enabled);
     QString currentDefaultModel() const;
+    QString suggestedSettingsPath() const;
 };
 
 #endif // MAINWINDOW_H

@@ -37,6 +37,8 @@ public:
     static AppConfig defaultConfig();
     static AppConfig fromJson(const QJsonDocument &doc, bool *ok = nullptr);
     static QJsonDocument toJson(const AppConfig &config);
+    static bool loadFromFile(const QString &path, AppConfig *config);
+    static bool saveToFile(const QString &path, const AppConfig &config);
 };
 
 #endif // CONFIGSTORE_H
