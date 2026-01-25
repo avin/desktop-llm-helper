@@ -2,8 +2,11 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonParseError>
+#include <QSaveFile>
 #include <QStandardPaths>
 
 namespace {
@@ -124,4 +127,44 @@ QJsonDocument ConfigStore::toJson(const AppConfig &config) {
     };
 
     return QJsonDocument(root);
+}
+
+bool ConfigStore::loadFromFile(const QString &path, AppConfig *config) {
+    if (!config || path.trimmed().isEmpty())
+        return false;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    const QByteArray payload = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+        return false;
+
+    bool ok = false;
+    const AppConfig parsed = fromJson(doc, &ok);
+    if (!ok)
+        return false;
+
+    *config = parsed;
+    return true;
+}
+
+bool ConfigStore::saveToFile(const QString &path, const AppConfig &config) {
+    if (path.trimmed().isEmpty())
+        return false;
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+
+    const QJsonDocument doc = toJson(config);
+    if (file.write(doc.toJson()) < 0)
+        return false;
+
+    return file.commit();
 }

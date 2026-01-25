@@ -123,6 +123,50 @@
         <item row="5" column="1">
          <widget class="QLineEdit" name="lineEditHotkey"/>
         </item>
+        <item row="6" column="0" colspan="2">
+         <spacer name="verticalSpacerSettings">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item row="7" column="0" colspan="2">
+         <layout class="QHBoxLayout" name="horizontalLayoutSettingsActions">
+          <item>
+           <spacer name="horizontalSpacerSettingsActions">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButtonExportSettings">
+            <property name="text">
+             <string>Export Settings</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButtonImportSettings">
+            <property name="text">
+             <string>Import Settings</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
        </layout>
       </widget>
       <widget class="QWidget" name="tab_2">
