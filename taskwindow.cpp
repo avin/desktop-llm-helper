@@ -829,11 +829,10 @@ QString TaskWindow::formatUserMessageBlock(const QString &text) const {
     normalized.replace("\r", "\n");
     const QStringList lines = normalized.split('\n');
 
-    QString block = "---\n\n";
-    block += "> **You**\n";
-    block += ">\n";
+    QString block = "---\n";
+    block += "> **You**: \n";
     for (const QString &line : lines)
-        block += "> " + line + "\n";
+        block += "> " + line + "  \n";
     block += "\n---";
     return block;
 }
