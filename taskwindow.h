@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QLabel>
 #include <QPointer>
+#include <QSize>
 
 #include "configstore.h"
 
@@ -20,10 +21,14 @@ class TaskWindow : public QWidget {
     Q_OBJECT
 
 public:
-    explicit TaskWindow(const QList<TaskDefinition> &tasks,
+    explicit TaskWindow(const QList<TaskDefinition> &taskList,
                         const AppSettings &settings,
                         QWidget *parent = nullptr);
     ~TaskWindow() override;
+
+signals:
+    void taskResponsePrefsChanged(int taskIndex, const QSize &size, int zoom);
+    void taskResponsePrefsCommitRequested();
 
 protected:
     void keyPressEvent(QKeyEvent *ev) override;
@@ -35,6 +40,8 @@ private slots:
     void animateLoadingText();
 
 private:
+    QList<TaskDefinition> tasks;
+    int activeTaskIndex;
     AppSettings settings;
     QNetworkAccessManager *networkManager;
     QWidget *loadingWindow;
@@ -62,6 +69,9 @@ private:
     QString extractResponseTextFromJson(const QByteArray &data) const;
     void resetResponseState();
     QString parseStreamDelta(const QByteArray &line);
+    void applyResponsePrefs();
+    void handleResponseResize(const QSize &size);
+    void handleResponseZoomDelta(int steps);
 
     void showLoadingIndicator();
     void hideLoadingIndicator();

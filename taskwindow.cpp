@@ -22,6 +22,7 @@
 #include <QNetworkRequest>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QScrollBar>
 #include <QStringList>
@@ -118,6 +119,10 @@ public:
         zoomCallback = std::move(callback);
     }
 
+    void setZoomDeltaCallback(std::function<void(int)> callback) {
+        zoomDeltaCallback = std::move(callback);
+    }
+
 protected:
     void wheelEvent(QWheelEvent *event) override {
         if (event->modifiers().testFlag(Qt::ControlModifier)) {
@@ -131,10 +136,15 @@ protected:
             int steps = qAbs(delta) / 120;
             if (steps == 0)
                 steps = 1;
-            if (delta > 0)
+            if (delta > 0) {
                 zoomIn(steps);
-            else
+                if (zoomDeltaCallback)
+                    zoomDeltaCallback(steps);
+            } else {
                 zoomOut(steps);
+                if (zoomDeltaCallback)
+                    zoomDeltaCallback(-steps);
+            }
             if (zoomCallback)
                 zoomCallback();
             event->accept();
@@ -145,6 +155,7 @@ protected:
 
 private:
     std::function<void()> zoomCallback;
+    std::function<void(int)> zoomDeltaCallback;
 };
 
 class MarkdownCodeHighlighter : public QSyntaxHighlighter {
@@ -304,12 +315,14 @@ const QString &markdownCss() {
 }
 }
 
-TaskWindow::TaskWindow(const QList<TaskDefinition> &tasks,
+TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
                        const AppSettings &settings,
                        QWidget *parent)
     : QWidget(parent,
               Qt::Window | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
               | Qt::FramelessWindowHint)
+    , tasks(taskList)
+    , activeTaskIndex(-1)
     , settings(settings)
     , networkManager(new QNetworkAccessManager(this))
     , loadingWindow(nullptr)
@@ -358,7 +371,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &tasks,
     layout->setContentsMargins(2, 2, 2, 2);
     layout->setSpacing(2);
 
-    for (const TaskDefinition &task : tasks) {
+    for (int i = 0; i < tasks.size(); ++i) {
+        const TaskDefinition &task = tasks.at(i);
         QString text = task.name.isEmpty() ? tr("<Unnamed>") : task.name;
         auto *btn = new QPushButton(text, container);
         btn->setStyleSheet(
@@ -378,7 +392,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &tasks,
         btn->installEventFilter(this);
         if (!firstButton)
             firstButton = btn;
-        connect(btn, &QPushButton::clicked, this, [this, task]() {
+        connect(btn, &QPushButton::clicked, this, [this, i]() {
+            activeTaskIndex = i;
             hide();
             showLoadingIndicator();
 
@@ -389,6 +404,7 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &tasks,
             }
 
             QClipboard *clipboard = QGuiApplication::clipboard();
+            const TaskDefinition task = tasks.at(i);
             clipboard->setText(task.prompt + original);
 
             sendRequest(task, original);
@@ -602,6 +618,7 @@ void TaskWindow::ensureResponseWindow() {
     responseWindow = new QDialog(this);
     responseWindow->setAttribute(Qt::WA_DeleteOnClose, true);
     responseWindow->setWindowFlags(responseWindow->windowFlags() | Qt::Dialog);
+    responseWindow->installEventFilter(this);
 
     auto *lay = new QVBoxLayout(responseWindow);
     auto *view = new MarkdownTextBrowser(responseWindow);
@@ -620,10 +637,13 @@ void TaskWindow::ensureResponseWindow() {
     view->setZoomCallback([this]() {
         applyMarkdownStyles();
     });
+    view->setZoomDeltaCallback([this](int steps) {
+        handleResponseZoomDelta(steps);
+    });
     lay->addWidget(view);
 
     responseWindow->setWindowTitle(tr("LLM Response"));
-    responseWindow->resize(600, 200);
+    applyResponsePrefs();
 
     const QPoint cursorPos = QCursor::pos();
     moveNearCursor(responseWindow, cursorPos);
@@ -745,7 +765,72 @@ QString TaskWindow::parseStreamDelta(const QByteArray &line) {
     return deltaText;
 }
 
+void TaskWindow::applyResponsePrefs() {
+    QSize targetSize(600, 200);
+    int targetZoom = 0;
+    if (activeTaskIndex >= 0 && activeTaskIndex < tasks.size()) {
+        TaskDefinition &task = tasks[activeTaskIndex];
+        if (task.responseWidth > 0 && task.responseHeight > 0)
+            targetSize = QSize(task.responseWidth, task.responseHeight);
+        targetZoom = task.responseZoom;
+        if (task.responseWidth != targetSize.width()
+            || task.responseHeight != targetSize.height()) {
+            task.responseWidth = targetSize.width();
+            task.responseHeight = targetSize.height();
+            emit taskResponsePrefsChanged(activeTaskIndex, targetSize, task.responseZoom);
+        }
+    }
+
+    if (responseWindow)
+        responseWindow->resize(targetSize);
+
+    if (responseView) {
+        if (targetZoom > 0)
+            responseView->zoomIn(targetZoom);
+        else if (targetZoom < 0)
+            responseView->zoomOut(-targetZoom);
+        applyMarkdownStyles();
+    }
+}
+
+void TaskWindow::handleResponseResize(const QSize &size) {
+    if (!size.isValid())
+        return;
+    if (activeTaskIndex < 0 || activeTaskIndex >= tasks.size())
+        return;
+    TaskDefinition &task = tasks[activeTaskIndex];
+    if (task.responseWidth == size.width() && task.responseHeight == size.height())
+        return;
+    task.responseWidth = size.width();
+    task.responseHeight = size.height();
+    emit taskResponsePrefsChanged(activeTaskIndex, size, task.responseZoom);
+}
+
+void TaskWindow::handleResponseZoomDelta(int steps) {
+    if (steps == 0)
+        return;
+    if (activeTaskIndex < 0 || activeTaskIndex >= tasks.size())
+        return;
+    TaskDefinition &task = tasks[activeTaskIndex];
+    const int newZoom = task.responseZoom + steps;
+    if (newZoom == task.responseZoom)
+        return;
+    task.responseZoom = newZoom;
+    emit taskResponsePrefsChanged(activeTaskIndex,
+                                  QSize(task.responseWidth, task.responseHeight),
+                                  task.responseZoom);
+}
+
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (responseWindow && watched == responseWindow.data()
+        && event->type() == QEvent::Close) {
+        emit taskResponsePrefsCommitRequested();
+    }
+    if (responseWindow && watched == responseWindow.data()
+        && event->type() == QEvent::Resize) {
+        auto *resizeEvent = static_cast<QResizeEvent *>(event);
+        handleResponseResize(resizeEvent->size());
+    }
     if (event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent*>(event);
         if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)

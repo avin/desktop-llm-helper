@@ -20,6 +20,9 @@ struct TaskDefinition {
     bool insertMode = true;
     int maxTokens = 300;
     double temperature = 0.5;
+    int responseWidth = 600;
+    int responseHeight = 200;
+    int responseZoom = 0;
 };
 
 struct AppConfig {

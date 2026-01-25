@@ -14,6 +14,11 @@ TaskDefinition taskFromJson(const QJsonObject &obj) {
     task.insertMode = obj.value("insert").toBool(true);
     task.maxTokens = obj.value("maxTokens").toInt(300);
     task.temperature = obj.value("temperature").toDouble(0.5);
+    const int width = obj.value("responseWidth").toInt(600);
+    const int height = obj.value("responseHeight").toInt(200);
+    task.responseWidth = width > 0 ? width : 600;
+    task.responseHeight = height > 0 ? height : 200;
+    task.responseZoom = obj.value("responseZoom").toInt(0);
     return task;
 }
 
@@ -23,7 +28,10 @@ QJsonObject taskToJson(const TaskDefinition &task) {
         {"prompt", task.prompt},
         {"insert", task.insertMode},
         {"maxTokens", task.maxTokens},
-        {"temperature", task.temperature}
+        {"temperature", task.temperature},
+        {"responseWidth", task.responseWidth},
+        {"responseHeight", task.responseHeight},
+        {"responseZoom", task.responseZoom}
     };
 }
 } // namespace

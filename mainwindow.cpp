@@ -142,7 +142,8 @@ MainWindow::MainWindow(QWidget *parent)
       , ui(new Ui::MainWindow)
       , hotkeyCaptured(false)
       , hotkeyManager(new HotkeyManager(this))
-      , loadingConfig(false) {
+      , loadingConfig(false)
+      , trayIcon(nullptr) {
     instance = this;
     ui->setupUi(this);
     // Include application name in the window title
@@ -264,6 +265,20 @@ void MainWindow::removeTaskWidget(TaskWidget *task) {
     }
 }
 
+void MainWindow::updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom) {
+    if (taskIndex < 0 || taskIndex >= ui->tasksTabWidget->count())
+        return;
+    auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(taskIndex));
+    if (!task)
+        return;
+    task->setResponseWindowSize(size);
+    task->setResponseZoom(zoom);
+}
+
+void MainWindow::commitTaskResponsePrefs() {
+    saveConfig();
+}
+
 void MainWindow::applyConfig(const AppConfig &config) {
     ui->lineEditApiEndpoint->setText(config.settings.apiEndpoint);
     ui->lineEditModelName->setText(config.settings.modelName);
@@ -335,7 +350,11 @@ void MainWindow::clearTasks() {
 
 void MainWindow::handleGlobalHotkey() {
     const AppConfig config = buildConfigFromUi();
-    new TaskWindow(config.tasks, config.settings);
+    auto *window = new TaskWindow(config.tasks, config.settings);
+    connect(window, &TaskWindow::taskResponsePrefsChanged,
+            this, &MainWindow::updateTaskResponsePrefs);
+    connect(window, &TaskWindow::taskResponsePrefsCommitRequested,
+            this, &MainWindow::commitTaskResponsePrefs);
 }
 
 void MainWindow::createTrayIcon() {

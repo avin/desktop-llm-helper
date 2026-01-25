@@ -8,6 +8,7 @@
 #include <QSystemTrayIcon>
 #include <QCloseEvent>
 #include <QPointer>
+#include <QSize>
 
 #include "hotkeymanager.h"
 #include "configstore.h"
@@ -39,6 +40,8 @@ private slots:
     void on_pushButtonAddTask_clicked();
     void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
     void removeTaskWidget(TaskWidget *task);
+    void updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom);
+    void commitTaskResponsePrefs();
 
 private:
     Ui::MainWindow *ui;

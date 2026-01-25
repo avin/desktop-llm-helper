@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QString>
+#include <QSize>
 
 namespace Ui {
     class TaskWidget;
@@ -29,6 +30,9 @@ public:
     void setMaxTokens(int tokens);
     void setTemperature(double temp);
 
+    void setResponseWindowSize(const QSize &size);
+    void setResponseZoom(int zoom);
+
     TaskDefinition toDefinition() const;
     void applyDefinition(const TaskDefinition &definition);
 
@@ -41,6 +45,9 @@ private slots:
 
 private:
     Ui::TaskWidget *ui;
+    int responseWidth = 600;
+    int responseHeight = 200;
+    int responseZoomValue = 0;
 };
 
 #endif // TASKWIDGET_H
