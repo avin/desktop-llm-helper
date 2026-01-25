@@ -60,7 +60,7 @@ public:
         if (!opt.icon.isNull() && !opt.text.isEmpty())
             width += fm.horizontalAdvance(QLatin1Char(' '));
         if (hasCloseButton(index))
-            width += closeButtonSide(opt) + closeButtonPadding();
+            width += closeButtonSide(opt, tabRect(index)) + closeButtonPadding();
         width += hspace;
         int height = qMax(textSize.height(), iconSize.height()) + vspace;
         return QSize(width, height);
@@ -108,21 +108,18 @@ protected:
                                   opt.state & QStyle::State_Enabled, opt.text, QPalette::WindowText);
 
             if (shouldShowClose(i))
-                drawCloseButton(painter, opt, closeRect);
+                drawCloseButton(painter, opt, closeRect, isCloseHot(i));
         }
     }
 
     void mouseMoveEvent(QMouseEvent *event) override {
-        int index = tabAt(event->pos());
-        if (index != hoverIndex) {
-            hoverIndex = index;
-            update();
-        }
+        updateHoverState(event->pos());
         QTabBar::mouseMoveEvent(event);
     }
 
     void leaveEvent(QEvent *event) override {
         hoverIndex = -1;
+        hoverCloseIndex = -1;
         pressIndex = -1;
         update();
         QTabBar::leaveEvent(event);
@@ -154,7 +151,7 @@ protected:
             initStyleOption(&opt, index);
             QRect closeRect = closeRectForTab(index, opt);
             bool shouldClose = (tabAt(event->pos()) == index) && closeRect.contains(event->pos());
-            update();
+            updateHoverState(event->pos());
             if (shouldClose && closeRequestHandler) {
                 closeRequestHandler(index);
                 event->accept();
@@ -167,6 +164,7 @@ protected:
 private:
     CloseHandler closeRequestHandler;
     int hoverIndex = -1;
+    int hoverCloseIndex = -1;
     int pressIndex = -1;
 
     bool isAddTab(int index) const {
@@ -183,8 +181,14 @@ private:
         return hasCloseButton(index) && (index == hoverIndex || index == pressIndex);
     }
 
-    int closeButtonSide(const QStyleOptionTab &opt) const {
-        return qMax(10, opt.fontMetrics.height() - 2);
+    bool isCloseHot(int index) const {
+        return hasCloseButton(index) && (index == hoverCloseIndex || index == pressIndex);
+    }
+
+    int closeButtonSide(const QStyleOptionTab &opt, const QRect &tabRect) const {
+        int base = qMax(12, opt.fontMetrics.height() - 2);
+        int maxSide = qMax(10, tabRect.height() - 6);
+        return qMin(base, maxSide);
     }
 
     int closeButtonPadding() const {
@@ -193,27 +197,49 @@ private:
 
     QRect closeRectForTab(int index, const QStyleOptionTab &opt) const {
         QRect rect = tabRect(index);
-        int side = closeButtonSide(opt);
+        int side = closeButtonSide(opt, rect);
         int padding = closeButtonPadding();
         int x = rect.right() - padding - side;
         int y = rect.center().y() - (side / 2);
         return QRect(x, y, side, side);
     }
 
-    void drawCloseButton(QStylePainter &painter, const QStyleOptionTab &opt, QRect rect) const {
+    void drawCloseButton(QStylePainter &painter, const QStyleOptionTab &opt,
+                         const QRect &rect, bool hot) const {
         if (!rect.isValid())
             return;
-        int inset = qMax(2, rect.width() / 4);
-        rect.adjust(inset, inset, -inset, -inset);
-        QPen pen(opt.palette.color(QPalette::WindowText));
-        pen.setWidth(1);
-        pen.setCapStyle(Qt::RoundCap);
+        qreal inset = qMax(2.0, rect.width() / 4.0);
+        QRectF drawRect = QRectF(rect).adjusted(inset, inset, -inset, -inset);
+        if (drawRect.width() < 2.0 || drawRect.height() < 2.0)
+            return;
+        QColor color = hot ? QColor(200, 60, 60) : opt.palette.color(QPalette::WindowText);
+        if (!hot)
+            color.setAlphaF(0.7);
+        qreal penWidth = qMax(1.4, drawRect.width() / 6.0);
+        QPen pen(color, penWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         painter.save();
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(pen);
-        painter.drawLine(rect.topLeft(), rect.bottomRight());
-        painter.drawLine(rect.topRight(), rect.bottomLeft());
+        painter.drawLine(drawRect.topLeft(), drawRect.bottomRight());
+        painter.drawLine(drawRect.topRight(), drawRect.bottomLeft());
         painter.restore();
+    }
+
+    void updateHoverState(const QPoint &pos) {
+        int newHoverIndex = tabAt(pos);
+        int newHoverCloseIndex = -1;
+        if (hasCloseButton(newHoverIndex)) {
+            QStyleOptionTab opt;
+            initStyleOption(&opt, newHoverIndex);
+            QRect closeRect = closeRectForTab(newHoverIndex, opt);
+            if (closeRect.contains(pos))
+                newHoverCloseIndex = newHoverIndex;
+        }
+        if (newHoverIndex != hoverIndex || newHoverCloseIndex != hoverCloseIndex) {
+            hoverIndex = newHoverIndex;
+            hoverCloseIndex = newHoverCloseIndex;
+            update();
+        }
     }
 };
 
