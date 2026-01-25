@@ -22,7 +22,8 @@
 #include <QNetworkRequest>
 #include <QPushButton>
 #include <QScreen>
-#include <QTextEdit>
+#include <QScrollBar>
+#include <QTextBrowser>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -67,7 +68,10 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &tasks,
     , loadingTimer(nullptr)
     , loadingLabel(nullptr)
     , animationTimer(nullptr)
-    , dotCount(0) {
+    , dotCount(0)
+    , responseWindow(nullptr)
+    , responseView(nullptr)
+    , sawStreamFormat(false) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
@@ -218,6 +222,7 @@ QString TaskWindow::applyCharLimit(const QString &text) const {
 }
 
 void TaskWindow::sendRequest(const TaskDefinition &task, const QString &originalText) {
+    resetResponseState();
     const QString sendText = applyCharLimit(originalText);
 
     QNetworkRequest request(QUrl(settings.apiEndpoint));
@@ -239,16 +244,60 @@ void TaskWindow::sendRequest(const TaskDefinition &task, const QString &original
     body["messages"] = messagesArray;
     body["max_tokens"] = task.maxTokens;
     body["temperature"] = task.temperature;
+    if (!task.insertMode)
+        body["stream"] = true;
     QJsonDocument bodyDoc(body);
 
     QNetworkReply *reply = networkManager->post(request, bodyDoc.toJson());
+    connect(reply, &QNetworkReply::readyRead, this, [this, task, reply]() {
+        handleReplyReadyRead(task, reply);
+    });
     connect(reply, &QNetworkReply::finished, this, [this, task, reply]() {
-        handleReply(task, reply);
+        handleReplyFinished(task, reply);
     });
 }
 
-void TaskWindow::handleReply(const TaskDefinition &task, QNetworkReply *reply) {
+void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply) {
+    const QByteArray chunk = reply->readAll();
+    if (chunk.isEmpty())
+        return;
+
+    responseBody.append(chunk);
+    streamBuffer.append(chunk);
+
+    bool appended = false;
+    while (true) {
+        const int lineEnd = streamBuffer.indexOf('\n');
+        if (lineEnd < 0)
+            break;
+        const QByteArray line = streamBuffer.left(lineEnd);
+        streamBuffer.remove(0, lineEnd + 1);
+        const QString delta = parseStreamDelta(line);
+        if (!delta.isEmpty()) {
+            responseText += delta;
+            appended = true;
+        }
+    }
+
+    if (sawStreamFormat) {
+        hideLoadingIndicator();
+        if (!task.insertMode)
+            ensureResponseWindow();
+    }
+
+    if (appended && !task.insertMode)
+        updateResponseView();
+}
+
+void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *reply) {
     hideLoadingIndicator();
+
+    if (!streamBuffer.isEmpty()) {
+        const QString delta = parseStreamDelta(streamBuffer);
+        if (!delta.isEmpty())
+            responseText += delta;
+        streamBuffer.clear();
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         const QString errStr = reply->errorString();
@@ -262,25 +311,22 @@ void TaskWindow::handleReply(const TaskDefinition &task, QNetworkReply *reply) {
         return;
     }
 
-    const QByteArray respData = reply->readAll();
+    if (!sawStreamFormat && responseText.isEmpty()) {
+        responseText = extractResponseTextFromJson(responseBody);
+    }
+
     reply->deleteLater();
 
-    const QJsonDocument respDoc = QJsonDocument::fromJson(respData);
-    if (!respDoc.isObject())
+    if (task.insertMode) {
+        if (!responseText.isEmpty())
+            insertResponse(responseText);
         return;
-    const QJsonObject respObj = respDoc.object();
-    const QJsonArray choices = respObj.value("choices").toArray();
-    if (choices.isEmpty())
-        return;
-    const QJsonObject msg = choices.first().toObject()
-        .value("message")
-        .toObject();
-    const QString result = msg.value("content").toString();
+    }
 
-    if (task.insertMode)
-        insertResponse(result);
-    else
-        showResponseWindow(result);
+    if (responseWindow || !responseText.isEmpty()) {
+        ensureResponseWindow();
+        updateResponseView();
+    }
 }
 
 void TaskWindow::insertResponse(const QString &text) {
@@ -301,29 +347,94 @@ void TaskWindow::insertResponse(const QString &text) {
     SendInput(4, pasteInputs, sizeof(INPUT));
 }
 
-void TaskWindow::showResponseWindow(const QString &text) {
-    auto *respWin = new QDialog;
-    respWin->setAttribute(Qt::WA_DeleteOnClose, true);
-    respWin->setWindowFlags(respWin->windowFlags() | Qt::Dialog);
+void TaskWindow::ensureResponseWindow() {
+    if (responseWindow)
+        return;
 
-    auto *lay = new QVBoxLayout(respWin);
-    auto *edit = new QTextEdit(respWin);
-    QFont font = edit->font();
+    responseWindow = new QDialog(this);
+    responseWindow->setAttribute(Qt::WA_DeleteOnClose, true);
+    responseWindow->setWindowFlags(responseWindow->windowFlags() | Qt::Dialog);
+
+    auto *lay = new QVBoxLayout(responseWindow);
+    responseView = new QTextBrowser(responseWindow);
+    QFont font = responseView->font();
     font.setPointSize(12);
-    edit->setFont(font);
-    edit->setPlainText(text);
-    edit->setReadOnly(true);
-    lay->addWidget(edit);
+    responseView->setFont(font);
+    responseView->setReadOnly(true);
+    responseView->setOpenExternalLinks(true);
+    lay->addWidget(responseView);
 
-    respWin->setWindowTitle(tr("LLM Response"));
-    respWin->resize(600, 200);
+    responseWindow->setWindowTitle(tr("LLM Response"));
+    responseWindow->resize(600, 200);
 
     const QPoint cursorPos = QCursor::pos();
-    moveNearCursor(respWin, cursorPos);
+    moveNearCursor(responseWindow, cursorPos);
 
-    respWin->show();
-    respWin->raise();
-    respWin->activateWindow();
+    responseWindow->show();
+    responseWindow->raise();
+    responseWindow->activateWindow();
+}
+
+void TaskWindow::updateResponseView() {
+    if (!responseView)
+        return;
+    QScrollBar *bar = responseView->verticalScrollBar();
+    const bool atBottom = bar && bar->value() >= bar->maximum();
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+    responseView->setMarkdown(responseText);
+#else
+    responseView->setPlainText(responseText);
+#endif
+    if (atBottom)
+        bar->setValue(bar->maximum());
+}
+
+QString TaskWindow::extractResponseTextFromJson(const QByteArray &data) const {
+    const QJsonDocument respDoc = QJsonDocument::fromJson(data);
+    if (!respDoc.isObject())
+        return QString();
+    const QJsonObject respObj = respDoc.object();
+    const QJsonArray choices = respObj.value("choices").toArray();
+    if (choices.isEmpty())
+        return QString();
+    const QJsonObject msg = choices.first().toObject()
+        .value("message")
+        .toObject();
+    return msg.value("content").toString();
+}
+
+void TaskWindow::resetResponseState() {
+    responseBody.clear();
+    streamBuffer.clear();
+    responseText.clear();
+    sawStreamFormat = false;
+    responseWindow = nullptr;
+    responseView = nullptr;
+}
+
+QString TaskWindow::parseStreamDelta(const QByteArray &line) {
+    const QByteArray trimmed = line.trimmed();
+    if (trimmed.isEmpty())
+        return QString();
+    if (!trimmed.startsWith("data:"))
+        return QString();
+    sawStreamFormat = true;
+    const QByteArray payload = trimmed.mid(5).trimmed();
+    if (payload == "[DONE]")
+        return QString();
+
+    const QJsonDocument doc = QJsonDocument::fromJson(payload);
+    if (!doc.isObject())
+        return QString();
+    const QJsonObject obj = doc.object();
+    const QJsonArray choices = obj.value("choices").toArray();
+    if (choices.isEmpty())
+        return QString();
+    const QJsonObject choice = choices.first().toObject();
+    QString deltaText = choice.value("delta").toObject().value("content").toString();
+    if (deltaText.isEmpty())
+        deltaText = choice.value("message").toObject().value("content").toString();
+    return deltaText;
 }
 
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {

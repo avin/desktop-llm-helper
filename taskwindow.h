@@ -7,11 +7,14 @@
 #include <QKeyEvent>
 #include <QTimer>
 #include <QLabel>
+#include <QPointer>
 
 #include "configstore.h"
 
 class QNetworkAccessManager;
 class QNetworkReply;
+class QTextBrowser;
+class QDialog;
 
 class TaskWindow : public QWidget {
     Q_OBJECT
@@ -40,12 +43,24 @@ private:
     QTimer *animationTimer;
     int dotCount;
 
+    QPointer<QDialog> responseWindow;
+    QPointer<QTextBrowser> responseView;
+    QByteArray responseBody;
+    QByteArray streamBuffer;
+    QString responseText;
+    bool sawStreamFormat;
+
     QString captureSelectedText();
     QString applyCharLimit(const QString &text) const;
     void sendRequest(const TaskDefinition &task, const QString &originalText);
-    void handleReply(const TaskDefinition &task, QNetworkReply *reply);
+    void handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply);
+    void handleReplyFinished(const TaskDefinition &task, QNetworkReply *reply);
     void insertResponse(const QString &text);
-    void showResponseWindow(const QString &text);
+    void ensureResponseWindow();
+    void updateResponseView();
+    QString extractResponseTextFromJson(const QByteArray &data) const;
+    void resetResponseState();
+    QString parseStreamDelta(const QByteArray &line);
 
     void showLoadingIndicator();
     void hideLoadingIndicator();
