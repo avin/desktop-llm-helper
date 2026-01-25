@@ -121,13 +121,6 @@
        </attribute>
        <layout class="QVBoxLayout" name="verticalLayoutTab2">
         <item>
-         <widget class="QPushButton" name="pushButtonAddTask">
-          <property name="text">
-           <string>Add Task</string>
-          </property>
-         </widget>
-        </item>
-        <item>
          <widget class="QTabWidget" name="tasksTabWidget"/>
         </item>
        </layout>

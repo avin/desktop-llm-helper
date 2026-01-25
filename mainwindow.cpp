@@ -10,16 +10,92 @@
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QTabBar>
+#include <QTabWidget>
+#include <QStyle>
+#include <QStyleOptionTab>
+#include <QStylePainter>
+#include <QFontMetrics>
 #include <QMenu>
 #include <QAction>
 #include <QSystemTrayIcon>
 #include <QIcon>
 #include <QCloseEvent>
 #include <QApplication>
+#include <QVariant>
 
 #include <windows.h>
 
 QPointer<MainWindow> MainWindow::instance = nullptr;
+
+namespace {
+constexpr const char kAddTabMarker[] = "add_tab";
+
+class TaskTabBar : public QTabBar {
+public:
+    explicit TaskTabBar(QWidget *parent = nullptr)
+        : QTabBar(parent) {}
+
+    QSize tabSizeHint(int index) const override {
+        QStyleOptionTab opt;
+        initStyleOption(&opt, index);
+        QFontMetrics fm = opt.fontMetrics;
+        QSize textSize = fm.size(Qt::TextShowMnemonic, opt.text);
+        QSize iconSize = opt.icon.isNull() ? QSize(0, 0) : opt.iconSize;
+
+        const int hspace = style()->pixelMetric(QStyle::PM_TabBarTabHSpace, &opt, this);
+        const int vspace = style()->pixelMetric(QStyle::PM_TabBarTabVSpace, &opt, this);
+        int width = textSize.width() + iconSize.width();
+        if (!opt.icon.isNull() && !opt.text.isEmpty())
+            width += fm.horizontalAdvance(QLatin1Char(' '));
+        width += hspace;
+        int height = qMax(textSize.height(), iconSize.height()) + vspace;
+        return QSize(width, height);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        Q_UNUSED(event);
+        QStylePainter painter(this);
+        QStyleOptionTab opt;
+        for (int i = 0; i < count(); ++i) {
+            initStyleOption(&opt, i);
+            painter.drawControl(QStyle::CE_TabBarTabShape, opt);
+
+            QRect textRect = opt.rect;
+            int hspace = style()->pixelMetric(QStyle::PM_TabBarTabHSpace, &opt, this) / 2;
+            int vspace = style()->pixelMetric(QStyle::PM_TabBarTabVSpace, &opt, this) / 2;
+            textRect.adjust(hspace, vspace, -hspace, -vspace);
+
+            if (!opt.icon.isNull()) {
+                QSize iconSize = opt.iconSize.isValid() ? opt.iconSize : QSize(16, 16);
+                QRect iconRect = textRect;
+                iconRect.setWidth(iconSize.width());
+                iconRect.setHeight(iconSize.height());
+                iconRect.moveTop(textRect.top() + (textRect.height() - iconSize.height()) / 2);
+                QIcon::Mode iconMode = (opt.state & QStyle::State_Enabled) ? QIcon::Normal : QIcon::Disabled;
+                QIcon::State iconState = (opt.state & QStyle::State_Selected) ? QIcon::On : QIcon::Off;
+                painter.drawItemPixmap(iconRect, Qt::AlignLeft | Qt::AlignVCenter,
+                                       opt.icon.pixmap(iconSize, iconMode, iconState));
+                textRect.setLeft(iconRect.right() + 4);
+            }
+
+            Qt::Alignment textAlign = Qt::AlignVCenter | Qt::AlignLeft;
+            if (opt.text == "+")
+                textAlign = Qt::AlignCenter;
+            style()->drawItemText(&painter, textRect, textAlign, opt.palette,
+                                  opt.state & QStyle::State_Enabled, opt.text, QPalette::WindowText);
+        }
+    }
+};
+
+class TaskTabWidget : public QTabWidget {
+public:
+    explicit TaskTabWidget(QWidget *parent = nullptr)
+        : QTabWidget(parent) {
+        setTabBar(new TaskTabBar(this));
+    }
+};
+}
 
 class GlobalKeyInterceptor {
 public:
@@ -149,9 +225,26 @@ MainWindow::MainWindow(QWidget *parent)
     // Include application name in the window title
     setWindowTitle(QCoreApplication::applicationName() + " - " + tr("Settings"));
 
+    auto *oldTabs = ui->tasksTabWidget;
+    auto *newTabs = new TaskTabWidget(ui->tab_2);
+    newTabs->setObjectName(oldTabs->objectName());
+    int tabsIndex = ui->verticalLayoutTab2->indexOf(oldTabs);
+    ui->verticalLayoutTab2->removeWidget(oldTabs);
+    if (tabsIndex < 0)
+        ui->verticalLayoutTab2->addWidget(newTabs);
+    else
+        ui->verticalLayoutTab2->insertWidget(tabsIndex, newTabs);
+    oldTabs->deleteLater();
+    ui->tasksTabWidget = newTabs;
+
+    ui->tasksTabWidget->setTabPosition(QTabWidget::West);
+    ui->tasksTabWidget->tabBar()->setExpanding(false);
     ui->tasksTabWidget->setMovable(true);
     connect(ui->tasksTabWidget->tabBar(), &QTabBar::tabMoved,
-            this, &MainWindow::saveConfig);
+            this, &MainWindow::handleTaskTabMoved);
+    connect(ui->tasksTabWidget->tabBar(), &QTabBar::tabBarClicked,
+            this, &MainWindow::handleTaskTabClicked);
+    ensureAddTab();
 
     connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditModelName, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
@@ -248,10 +341,17 @@ void MainWindow::saveConfig() {
     hotkeyManager->registerHotkey(config.settings.hotkey);
 }
 
-void MainWindow::on_pushButtonAddTask_clicked() {
+void MainWindow::handleTaskTabClicked(int index) {
+    if (!isAddTabIndex(index))
+        return;
+
     TaskDefinition definition;
     addTaskTab(definition, true);
+    saveConfig();
+}
 
+void MainWindow::handleTaskTabMoved(int, int) {
+    ensureAddTabLast();
     saveConfig();
 }
 
@@ -267,6 +367,8 @@ void MainWindow::removeTaskWidget(TaskWidget *task) {
 
 void MainWindow::updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom) {
     if (taskIndex < 0 || taskIndex >= ui->tasksTabWidget->count())
+        return;
+    if (isAddTabIndex(taskIndex))
         return;
     auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(taskIndex));
     if (!task)
@@ -290,6 +392,11 @@ void MainWindow::applyConfig(const AppConfig &config) {
     clearTasks();
     for (const TaskDefinition &task : config.tasks)
         addTaskTab(task, false);
+
+    ensureAddTabLast();
+    int addIndex = addTabIndex();
+    if (addIndex > 0 || (addIndex == -1 && ui->tasksTabWidget->count() > 0))
+        ui->tasksTabWidget->setCurrentIndex(0);
 }
 
 AppConfig MainWindow::buildConfigFromUi() const {
@@ -307,6 +414,8 @@ AppConfig MainWindow::buildConfigFromUi() const {
 QList<TaskDefinition> MainWindow::currentTaskDefinitions() const {
     QList<TaskDefinition> list;
     for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
+        if (isAddTabIndex(i))
+            continue;
         if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i)))
             list.append(task->toDefinition());
     }
@@ -319,7 +428,10 @@ void MainWindow::addTaskTab(const TaskDefinition &definition, bool makeCurrent) 
     connectTaskSignals(task);
 
     QString tabLabel = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
-    int index = ui->tasksTabWidget->addTab(task, tabLabel);
+    int insertIndex = addTabIndex();
+    if (insertIndex < 0)
+        insertIndex = ui->tasksTabWidget->count();
+    int index = ui->tasksTabWidget->insertTab(insertIndex, task, tabLabel);
     if (makeCurrent)
         ui->tasksTabWidget->setCurrentIndex(index);
 }
@@ -341,11 +453,50 @@ void MainWindow::updateTaskTabTitle(TaskWidget *task) {
 }
 
 void MainWindow::clearTasks() {
-    while (ui->tasksTabWidget->count() > 0) {
-        QWidget *page = ui->tasksTabWidget->widget(0);
-        ui->tasksTabWidget->removeTab(0);
+    for (int i = ui->tasksTabWidget->count() - 1; i >= 0; --i) {
+        if (isAddTabIndex(i))
+            continue;
+        QWidget *page = ui->tasksTabWidget->widget(i);
+        ui->tasksTabWidget->removeTab(i);
         page->deleteLater();
     }
+}
+
+int MainWindow::addTabIndex() const {
+    QTabBar *bar = ui->tasksTabWidget->tabBar();
+    for (int i = 0; i < bar->count(); ++i) {
+        if (bar->tabData(i).toString() == QLatin1String(kAddTabMarker))
+            return i;
+    }
+    return -1;
+}
+
+bool MainWindow::isAddTabIndex(int index) const {
+    QTabBar *bar = ui->tasksTabWidget->tabBar();
+    if (index < 0 || index >= bar->count())
+        return false;
+    return bar->tabData(index).toString() == QLatin1String(kAddTabMarker);
+}
+
+void MainWindow::ensureAddTab() {
+    if (addTabIndex() != -1)
+        return;
+
+    auto *placeholder = new QWidget;
+    int index = ui->tasksTabWidget->addTab(placeholder, "+");
+    QTabBar *bar = ui->tasksTabWidget->tabBar();
+    bar->setTabData(index, QLatin1String(kAddTabMarker));
+    bar->setTabToolTip(index, tr("Add Task"));
+    ensureAddTabLast();
+}
+
+void MainWindow::ensureAddTabLast() {
+    int addIndex = addTabIndex();
+    if (addIndex < 0)
+        return;
+    int lastIndex = ui->tasksTabWidget->count() - 1;
+    if (addIndex != lastIndex)
+        ui->tasksTabWidget->tabBar()->moveTab(addIndex, lastIndex);
 }
 
 void MainWindow::handleGlobalHotkey() {
