@@ -38,8 +38,10 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private slots:
-    void on_pushButtonAddTask_clicked();
     void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
+    void handleTaskTabClicked(int index);
+    void handleTaskTabMoved(int from, int to);
+    void requestCloseTask(int index);
     void removeTaskWidget(TaskWidget *task);
     void updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom);
     void commitTaskResponsePrefs();
@@ -64,6 +66,10 @@ private:
     void connectTaskSignals(TaskWidget *task);
     void updateTaskTabTitle(TaskWidget *task);
     void clearTasks();
+    int addTabIndex() const;
+    bool isAddTabIndex(int index) const;
+    void ensureAddTab();
+    void ensureAddTabLast();
 };
 
 #endif // MAINWINDOW_H
