@@ -24,7 +24,7 @@ jobs:
         target: 'desktop'
         arch: 'win64_mingw'
         cache: true
-        tools: 'tools_ifw tools_mingw90'
+        tools: 'tools_ifw tools_mingw1310'
         
     - name: Get version from tag
       id: get_version
