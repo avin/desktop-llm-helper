@@ -7,8 +7,10 @@
 #include <QList>
 #include <QSystemTrayIcon>
 #include <QCloseEvent>
+#include <QPointer>
 
 #include "hotkeymanager.h"
+#include "configstore.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -23,7 +25,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
-    static MainWindow *instance;
+    static QPointer<MainWindow> instance;
 
 public slots:
     void setHotkeyText(const QString &text);
@@ -49,9 +51,14 @@ private:
     void createTrayIcon();
     void loadConfig();
     void saveConfig();
-    QString configFilePath() const;
-    QList<TaskWidget *> currentTasks() const;
     void applyDefaultSettings();
+    void applyConfig(const AppConfig &config);
+    AppConfig buildConfigFromUi() const;
+    QList<TaskDefinition> currentTaskDefinitions() const;
+    void addTaskTab(const TaskDefinition &definition, bool makeCurrent);
+    void connectTaskSignals(TaskWidget *task);
+    void updateTaskTabTitle(TaskWidget *task);
+    void clearTasks();
 };
 
 #endif // MAINWINDOW_H

@@ -6,13 +6,9 @@
 
 #include <QFile>
 #include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
 #include <QCoreApplication>
-#include <QDir>
 #include <QLineEdit>
 #include <QMetaObject>
-#include <QStandardPaths>
 #include <QTabBar>
 #include <QMenu>
 #include <QAction>
@@ -25,7 +21,7 @@
 #include <windows.h>
 #endif
 
-MainWindow *MainWindow::instance = nullptr;
+QPointer<MainWindow> MainWindow::instance = nullptr;
 
 #ifdef Q_OS_WIN
 class GlobalKeyInterceptor {
@@ -217,38 +213,17 @@ void MainWindow::setHotkeyText(const QString &text) {
     saveConfig();
 }
 
-QString MainWindow::configFilePath() const {
-    const QString configDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                              + QDir::separator() + QCoreApplication::applicationName();
-    QDir().mkpath(configDir);
-    return configDir + QDir::separator() + "config.json";
-}
-
 void MainWindow::applyDefaultSettings() {
-    ui->lineEditApiEndpoint->setText("https://api.openai.com/v1/chat/completions");
-    ui->lineEditModelName->setText("gpt-4.1-mini");
-    ui->lineEditApiKey->setText("YOUR_API_KEY_HERE");
-    ui->lineEditProxy->setText("");
-    ui->lineEditHotkey->setText("Win+Z");
-    ui->lineEditMaxChars->setText(QString::number(1000));
-
-    auto *task = new TaskWidget;
-    task->setName("🧠 Explane");
-    task->setPrompt("Explain the meaning of what will be written. The explanation should be brief, in 1-4 sentences.");
-    task->setInsertMode(false);
-    task->setMaxTokens(300);
-    task->setTemperature(0.5);
-    connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
-    connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
-    QString label = task->name();
-    ui->tasksTabWidget->addTab(task, label);
+    applyConfig(ConfigStore::defaultConfig());
 }
 
 void MainWindow::loadConfig() {
-    const QString path = configFilePath();
+    const QString path = ConfigStore::configFilePath();
     QFile file(path);
     if (!file.exists()) {
+        loadingConfig = true;
         applyDefaultSettings();
+        loadingConfig = false;
         saveConfig();
         return;
     }
@@ -256,48 +231,13 @@ void MainWindow::loadConfig() {
         return;
 
     loadingConfig = true;
-    const QByteArray data = file.readAll();
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
     file.close();
 
-    const QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (doc.isNull() || !doc.isObject()) {
-        loadingConfig = false;
-        return;
-    }
-
-    const QJsonObject root = doc.object();
-    const QJsonObject settings = root.value("settings").toObject();
-
-    ui->lineEditApiEndpoint->setText(settings.value("apiEndpoint").toString());
-    ui->lineEditModelName->setText(settings.value("modelName").toString());
-    ui->lineEditApiKey->setText(settings.value("apiKey").toString());
-    ui->lineEditProxy->setText(settings.value("proxy").toString());
-    ui->lineEditHotkey->setText(settings.value("hotkey").toString());
-    ui->lineEditMaxChars->setText(QString::number(settings.value("maxChars").toInt()));
-
-    const QJsonArray tasks = root.value("tasks").toArray();
-    for (const QJsonValue &value: tasks) {
-        const QJsonObject obj = value.toObject();
-        auto *task = new TaskWidget;
-        task->setName(obj.value("name").toString());
-        task->setPrompt(obj.value("prompt").toString());
-        task->setInsertMode(obj.value("insert").toBool(true));
-        task->setMaxTokens(obj.value("maxTokens").toInt(300));
-        task->setTemperature(obj.value("temperature").toDouble(0.5));
-
-        connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
-        connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
-        connect(task, &TaskWidget::configChanged, this, [this, task]() {
-            int idx = ui->tasksTabWidget->indexOf(task);
-            if (idx != -1) {
-                QString label = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
-                ui->tasksTabWidget->setTabText(idx, label);
-            }
-        });
-
-        QString tabLabel = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
-        ui->tasksTabWidget->addTab(task, tabLabel);
-    }
+    bool ok = false;
+    const AppConfig config = ConfigStore::fromJson(doc, &ok);
+    if (ok)
+        applyConfig(config);
 
     loadingConfig = false;
 }
@@ -306,59 +246,20 @@ void MainWindow::saveConfig() {
     if (loadingConfig)
         return;
 
-    QJsonObject settings{
-        {"apiEndpoint", ui->lineEditApiEndpoint->text()},
-        {"modelName", ui->lineEditModelName->text()},
-        {"apiKey", ui->lineEditApiKey->text()},
-        {"proxy", ui->lineEditProxy->text()},
-        {"hotkey", ui->lineEditHotkey->text()},
-        {"maxChars", ui->lineEditMaxChars->text().toInt()}
-    };
-
-    QJsonArray tasksArray;
-    for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
-        if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i))) {
-            QJsonObject taskObj{
-                {"name", task->name()},
-                {"prompt", task->prompt()},
-                {"insert", task->insertMode()},
-                {"maxTokens", task->maxTokens()},
-                {"temperature", task->temperature()}
-            };
-            tasksArray.append(taskObj);
-        }
-    }
-
-    QJsonObject root{
-        {"settings", settings},
-        {"tasks", tasksArray}
-    };
-
-    QJsonDocument doc(root);
-    QFile file(configFilePath());
+    const AppConfig config = buildConfigFromUi();
+    const QJsonDocument doc = ConfigStore::toJson(config);
+    QFile file(ConfigStore::configFilePath());
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         file.write(doc.toJson());
         file.close();
     }
 
-    hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
+    hotkeyManager->registerHotkey(config.settings.hotkey);
 }
 
 void MainWindow::on_pushButtonAddTask_clicked() {
-    auto *task = new TaskWidget;
-    connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
-    connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
-    connect(task, &TaskWidget::configChanged, this, [this, task]() {
-        int idx = ui->tasksTabWidget->indexOf(task);
-        if (idx != -1) {
-            QString lbl = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
-            ui->tasksTabWidget->setTabText(idx, lbl);
-        }
-    });
-
-    QString tabLabel = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
-    int index = ui->tasksTabWidget->addTab(task, tabLabel);
-    ui->tasksTabWidget->setCurrentIndex(index);
+    TaskDefinition definition;
+    addTaskTab(definition, true);
 
     saveConfig();
 }
@@ -373,17 +274,78 @@ void MainWindow::removeTaskWidget(TaskWidget *task) {
     }
 }
 
-QList<TaskWidget *> MainWindow::currentTasks() const {
-    QList<TaskWidget *> list;
+void MainWindow::applyConfig(const AppConfig &config) {
+    ui->lineEditApiEndpoint->setText(config.settings.apiEndpoint);
+    ui->lineEditModelName->setText(config.settings.modelName);
+    ui->lineEditApiKey->setText(config.settings.apiKey);
+    ui->lineEditProxy->setText(config.settings.proxy);
+    ui->lineEditHotkey->setText(config.settings.hotkey);
+    ui->lineEditMaxChars->setText(QString::number(config.settings.maxChars));
+
+    clearTasks();
+    for (const TaskDefinition &task : config.tasks)
+        addTaskTab(task, false);
+}
+
+AppConfig MainWindow::buildConfigFromUi() const {
+    AppConfig config;
+    config.settings.apiEndpoint = ui->lineEditApiEndpoint->text();
+    config.settings.modelName = ui->lineEditModelName->text();
+    config.settings.apiKey = ui->lineEditApiKey->text();
+    config.settings.proxy = ui->lineEditProxy->text();
+    config.settings.hotkey = ui->lineEditHotkey->text();
+    config.settings.maxChars = ui->lineEditMaxChars->text().toInt();
+    config.tasks = currentTaskDefinitions();
+    return config;
+}
+
+QList<TaskDefinition> MainWindow::currentTaskDefinitions() const {
+    QList<TaskDefinition> list;
     for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
         if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i)))
-            list.append(task);
+            list.append(task->toDefinition());
     }
     return list;
 }
 
+void MainWindow::addTaskTab(const TaskDefinition &definition, bool makeCurrent) {
+    auto *task = new TaskWidget;
+    task->applyDefinition(definition);
+    connectTaskSignals(task);
+
+    QString tabLabel = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
+    int index = ui->tasksTabWidget->addTab(task, tabLabel);
+    if (makeCurrent)
+        ui->tasksTabWidget->setCurrentIndex(index);
+}
+
+void MainWindow::connectTaskSignals(TaskWidget *task) {
+    connect(task, &TaskWidget::removeRequested, this, &MainWindow::removeTaskWidget);
+    connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
+    connect(task, &TaskWidget::configChanged, this, [this, task]() {
+        updateTaskTabTitle(task);
+    });
+}
+
+void MainWindow::updateTaskTabTitle(TaskWidget *task) {
+    int idx = ui->tasksTabWidget->indexOf(task);
+    if (idx != -1) {
+        QString label = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
+        ui->tasksTabWidget->setTabText(idx, label);
+    }
+}
+
+void MainWindow::clearTasks() {
+    while (ui->tasksTabWidget->count() > 0) {
+        QWidget *page = ui->tasksTabWidget->widget(0);
+        ui->tasksTabWidget->removeTab(0);
+        page->deleteLater();
+    }
+}
+
 void MainWindow::handleGlobalHotkey() {
-    new TaskWindow(currentTasks());
+    const AppConfig config = buildConfigFromUi();
+    new TaskWindow(config.tasks, config.settings);
 }
 
 void MainWindow::createTrayIcon() {

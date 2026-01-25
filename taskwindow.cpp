@@ -1,53 +1,89 @@
-#include <QMessageBox>
 #include "taskwindow.h"
-#include "taskwidget.h"
-#include <QDialog>
 
-#include <QColor>
-#include <QCursor>
-#include <QEvent>
-#include <QGraphicsDropShadowEffect>
-#include <QGuiApplication>
 #include <QClipboard>
-#include <QKeyEvent>
-#include <QPushButton>
-#include <QVBoxLayout>
-#include <QScreen>
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QNetworkProxy>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QUrl>
-#include <QFile>
+#include <QColor>
 #include <QCoreApplication>
-#include <QDir>
-#include <QTextEdit>
+#include <QCursor>
+#include <QDialog>
 #include <QElapsedTimer>
 #include <QEventLoop>
-#include <QTimer>
-#include <QLabel>
 #include <QFont>
-#include <QStandardPaths>
+#include <QGraphicsDropShadowEffect>
+#include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkProxy>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPushButton>
+#include <QScreen>
+#include <QTextEdit>
+#include <QTimer>
+#include <QUrl>
+#include <QVBoxLayout>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
 
-TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
+namespace {
+QPoint clampToScreen(const QPoint &pos, const QSize &size, const QRect &available) {
+    int x = pos.x();
+    int y = pos.y();
+    const int maxX = available.x() + available.width() - size.width();
+    const int maxY = available.y() + available.height() - size.height();
+    if (x > maxX)
+        x = maxX;
+    if (y > maxY)
+        y = maxY;
+    if (x < available.x())
+        x = available.x();
+    if (y < available.y())
+        y = available.y();
+    return QPoint(x, y);
+}
+
+void moveNearCursor(QWidget *widget, const QPoint &cursorPos) {
+    QScreen *screen = QGuiApplication::screenAt(cursorPos);
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    const QRect available = screen->availableGeometry();
+    widget->move(clampToScreen(cursorPos, widget->size(), available));
+}
+}
+
+TaskWindow::TaskWindow(const QList<TaskDefinition> &tasks,
+                       const AppSettings &settings,
+                       QWidget *parent)
     : QWidget(parent,
               Qt::Window | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
               | Qt::FramelessWindowHint)
-      , loadingWindow(nullptr)
-      , loadingTimer(nullptr)
-      , loadingLabel(nullptr)
-      , animationTimer(nullptr)
-      , dotCount(0) {
+    , settings(settings)
+    , networkManager(new QNetworkAccessManager(this))
+    , loadingWindow(nullptr)
+    , loadingTimer(nullptr)
+    , loadingLabel(nullptr)
+    , animationTimer(nullptr)
+    , dotCount(0) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::StrongFocus);
+
+    if (!this->settings.proxy.isEmpty()) {
+        QUrl proxyUrl(this->settings.proxy);
+        if (proxyUrl.isValid()) {
+            QNetworkProxy proxy;
+            proxy.setType(QNetworkProxy::HttpProxy);
+            proxy.setHostName(proxyUrl.host());
+            proxy.setPort(proxyUrl.port());
+            networkManager->setProxy(proxy);
+        }
+    }
 
     QPushButton *firstButton = nullptr;
 
@@ -72,10 +108,8 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     layout->setContentsMargins(2, 2, 2, 2);
     layout->setSpacing(2);
 
-    for (TaskWidget *task: tasks) {
-        if (!task)
-            continue;
-        QString text = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
+    for (const TaskDefinition &task : tasks) {
+        QString text = task.name.isEmpty() ? tr("<Unnamed>") : task.name;
         auto *btn = new QPushButton(text, container);
         btn->setStyleSheet(
             "QPushButton {"
@@ -95,195 +129,19 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
         if (!firstButton)
             firstButton = btn;
         connect(btn, &QPushButton::clicked, this, [this, task]() {
-            this->hide();
-            this->showLoadingIndicator();
+            hide();
+            showLoadingIndicator();
 
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            QString original;
-
-#ifdef Q_OS_WIN
-            clipboard->clear(QClipboard::Clipboard);
-            INPUT copyInputs[4] = {};
-            copyInputs[0].type = INPUT_KEYBOARD;
-            copyInputs[0].ki.wVk = VK_CONTROL;
-            copyInputs[1].type = INPUT_KEYBOARD;
-            copyInputs[1].ki.wVk = 'C';
-            copyInputs[2].type = INPUT_KEYBOARD;
-            copyInputs[2].ki.wVk = 'C';
-            copyInputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-            copyInputs[3].type = INPUT_KEYBOARD;
-            copyInputs[3].ki.wVk = VK_CONTROL;
-            copyInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(4, copyInputs, sizeof(INPUT));
-
-            QElapsedTimer timer;
-            timer.start();
-            while (timer.elapsed() < 200) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-                QString text = clipboard->text();
-                if (!text.isEmpty()) {
-                    original = text;
-                    break;
-                }
-            }
+            const QString original = captureSelectedText();
             if (original.isEmpty()) {
                 hideLoadingIndicator();
                 return;
             }
-#else
-            original = clipboard->text();
-#endif
 
-            QString prompt = task->prompt();
-            QString combined = prompt + original;
-            clipboard->setText(combined);
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            clipboard->setText(task.prompt + original);
 
-            QString configDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                        + QDir::separator() + QCoreApplication::applicationName();
-            QDir().mkpath(configDir);
-            QString configPath = configDir + QDir::separator() + "config.json";
-
-            QFile configFile(configPath);
-            if (!configFile.open(QIODevice::ReadOnly))
-                return;
-            QJsonDocument configDoc = QJsonDocument::fromJson(configFile.readAll());
-            configFile.close();
-            QJsonObject settings = configDoc.object().value("settings").toObject();
-            QString apiEndpoint = settings.value("apiEndpoint").toString();
-            QString modelName = settings.value("modelName").toString();
-            QString apiKey = settings.value("apiKey").toString();
-            QString proxyStr = settings.value("proxy").toString();
-
-            int maxChars = settings.value("maxChars").toInt(0);
-            QString sendText = original;
-            if (maxChars > 0 && sendText.length() > maxChars)
-                sendText = sendText.left(maxChars);
-
-            auto *manager = new QNetworkAccessManager(this);
-            if (!proxyStr.isEmpty()) {
-                QUrl proxyUrl(proxyStr);
-                if (proxyUrl.isValid()) {
-                    QNetworkProxy proxy;
-                    proxy.setType(QNetworkProxy::HttpProxy);
-                    proxy.setHostName(proxyUrl.host());
-                    proxy.setPort(proxyUrl.port());
-                    manager->setProxy(proxy);
-                }
-            }
-
-            QUrl url(apiEndpoint);
-            QNetworkRequest request(url);
-            request.setHeader(QNetworkRequest::ContentTypeHeader,
-                              "application/json");
-            request.setRawHeader("Authorization",
-                                 "Bearer " + apiKey.toUtf8());
-
-            QJsonObject systemMessage;
-            systemMessage["role"] = "system";
-            systemMessage["content"] = prompt;
-            QJsonObject userMessage;
-            userMessage["role"] = "user";
-            userMessage["content"] = sendText;
-            QJsonArray messagesArray;
-            messagesArray.append(systemMessage);
-            messagesArray.append(userMessage);
-
-            QJsonObject body;
-            body["model"] = modelName;
-            body["messages"] = messagesArray;
-            body["max_tokens"] = task->maxTokens();
-            body["temperature"] = task->temperature();
-            QJsonDocument bodyDoc(body);
-
-            manager->post(request, bodyDoc.toJson());
-            connect(manager, &QNetworkAccessManager::finished, this,
-                    [this, task](QNetworkReply *reply) {
-                        this->hideLoadingIndicator();
-                        if (reply->error() != QNetworkReply::NoError) {
-                            QString errStr = reply->errorString();
-                            int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-                            QMessageBox::critical(this,
-                                tr("Error"),
-                                tr("LLM request failed (%1): HTTP status %2")
-                                    .arg(errStr)
-                                    .arg(statusCode));
-                            reply->deleteLater();
-                            return;
-                        }
-                        QByteArray respData = reply->readAll();
-                        reply->deleteLater();
-                        QJsonDocument respDoc = QJsonDocument::fromJson(respData);
-                        if (!respDoc.isObject())
-                            return;
-                        QJsonObject respObj = respDoc.object();
-                        QJsonArray choices = respObj.value("choices").toArray();
-                        if (choices.isEmpty())
-                            return;
-                        QJsonObject msg = choices.first().toObject()
-                                .value("message")
-                                .toObject();
-                        QString result = msg.value("content").toString();
-
-                        if (task->insertMode()) {
-#ifdef Q_OS_WIN
-                            QClipboard *clipboard =
-                                    QGuiApplication::clipboard();
-                            clipboard->setText(result);
-
-                            INPUT pasteInputs[4] = {};
-                            pasteInputs[0].type = INPUT_KEYBOARD;
-                            pasteInputs[0].ki.wVk = VK_CONTROL;
-                            pasteInputs[1].type = INPUT_KEYBOARD;
-                            pasteInputs[1].ki.wVk = 'V';
-                            pasteInputs[2].type = INPUT_KEYBOARD;
-                            pasteInputs[2].ki.wVk = 'V';
-                            pasteInputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-                            pasteInputs[3].type = INPUT_KEYBOARD;
-                            pasteInputs[3].ki.wVk = VK_CONTROL;
-                            pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-                            SendInput(4, pasteInputs, sizeof(INPUT));
-#endif
-                        } else {
-            auto *respWin = new QDialog;
-            respWin->setAttribute(Qt::WA_DeleteOnClose, true);
-            respWin->setWindowFlags(respWin->windowFlags() | Qt::Dialog);
-
-                            auto *lay = new QVBoxLayout(respWin);
-                            auto *edit = new QTextEdit(respWin);
-                            QFont font = edit->font();
-                            font.setPointSize(12);
-                            edit->setFont(font);
-                            edit->setPlainText(result);
-                            edit->setReadOnly(true);
-                            lay->addWidget(edit);
-
-                            respWin->setWindowTitle(tr("LLM Response"));
-                            respWin->resize(600, 200);
-
-                            QPoint cursorPos = QCursor::pos();
-                            QScreen *screen = QGuiApplication::screenAt(cursorPos);
-                            if (!screen)
-                                screen = QGuiApplication::primaryScreen();
-                            QRect available = screen->availableGeometry();
-                            int x = cursorPos.x();
-                            int y = cursorPos.y();
-                            int w = respWin->width();
-                            int h = respWin->height();
-                            if (x + w > available.x() + available.width())
-                                x = available.x() + available.width() - w;
-                            if (y + h > available.y() + available.height())
-                                y = available.y() + available.height() - h;
-                            if (x < available.x())
-                                x = available.x();
-                            if (y < available.y())
-                                y = available.y();
-                            respWin->move(x, y);
-
-                            respWin->show();
-                            respWin->raise();
-                            respWin->activateWindow();
-                        }
-                    });
+            sendRequest(task, original);
         });
         layout->addWidget(btn);
     }
@@ -293,7 +151,7 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     adjustSize();
 
     const int btnSize = 16;
-    auto *closeBtn = new QPushButton(QString::fromUtf8("×"), this);
+    auto *closeBtn = new QPushButton(QString::fromUtf8("\xC3\x97"), this);
     closeBtn->setFixedSize(btnSize, btnSize);
     closeBtn->setFlat(true);
     closeBtn->setStyleSheet("QPushButton { "
@@ -313,29 +171,8 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     closeBtn->raise();
     connect(closeBtn, &QPushButton::clicked, this, &TaskWindow::close);
 
-    QPoint cursorPos = QCursor::pos();
-    QScreen *screen = QGuiApplication::screenAt(cursorPos);
-    if (!screen) {
-        screen = QGuiApplication::primaryScreen();
-    }
-    QRect available = screen->availableGeometry();
-    int x = cursorPos.x();
-    int y = cursorPos.y();
-    int w = width();
-    int h = height();
-    if (x + w > available.x() + available.width()) {
-        x = available.x() + available.width() - w;
-    }
-    if (y + h > available.y() + available.height()) {
-        y = available.y() + available.height() - h;
-    }
-    if (x < available.x()) {
-        x = available.x();
-    }
-    if (y < available.y()) {
-        y = available.y();
-    }
-    move(x, y);
+    const QPoint cursorPos = QCursor::pos();
+    moveNearCursor(this, cursorPos);
 
     show();
     raise();
@@ -343,6 +180,160 @@ TaskWindow::TaskWindow(const QList<TaskWidget *> &tasks, QWidget *parent)
     setFocus(Qt::OtherFocusReason);
     if (firstButton)
         firstButton->setFocus(Qt::TabFocusReason);
+}
+
+TaskWindow::~TaskWindow() {
+    hideLoadingIndicator();
+}
+
+QString TaskWindow::captureSelectedText() {
+    QClipboard *clipboard = QGuiApplication::clipboard();
+#ifdef Q_OS_WIN
+    clipboard->clear(QClipboard::Clipboard);
+    INPUT copyInputs[4] = {};
+    copyInputs[0].type = INPUT_KEYBOARD;
+    copyInputs[0].ki.wVk = VK_CONTROL;
+    copyInputs[1].type = INPUT_KEYBOARD;
+    copyInputs[1].ki.wVk = 'C';
+    copyInputs[2].type = INPUT_KEYBOARD;
+    copyInputs[2].ki.wVk = 'C';
+    copyInputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    copyInputs[3].type = INPUT_KEYBOARD;
+    copyInputs[3].ki.wVk = VK_CONTROL;
+    copyInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(4, copyInputs, sizeof(INPUT));
+
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 200) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const QString text = clipboard->text();
+        if (!text.isEmpty())
+            return text;
+    }
+    return QString();
+#else
+    return clipboard->text();
+#endif
+}
+
+QString TaskWindow::applyCharLimit(const QString &text) const {
+    if (settings.maxChars > 0 && text.length() > settings.maxChars)
+        return text.left(settings.maxChars);
+    return text;
+}
+
+void TaskWindow::sendRequest(const TaskDefinition &task, const QString &originalText) {
+    const QString sendText = applyCharLimit(originalText);
+
+    QNetworkRequest request(QUrl(settings.apiEndpoint));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Authorization", "Bearer " + settings.apiKey.toUtf8());
+
+    QJsonObject systemMessage;
+    systemMessage["role"] = "system";
+    systemMessage["content"] = task.prompt;
+    QJsonObject userMessage;
+    userMessage["role"] = "user";
+    userMessage["content"] = sendText;
+    QJsonArray messagesArray;
+    messagesArray.append(systemMessage);
+    messagesArray.append(userMessage);
+
+    QJsonObject body;
+    body["model"] = settings.modelName;
+    body["messages"] = messagesArray;
+    body["max_tokens"] = task.maxTokens;
+    body["temperature"] = task.temperature;
+    QJsonDocument bodyDoc(body);
+
+    QNetworkReply *reply = networkManager->post(request, bodyDoc.toJson());
+    connect(reply, &QNetworkReply::finished, this, [this, task, reply]() {
+        handleReply(task, reply);
+    });
+}
+
+void TaskWindow::handleReply(const TaskDefinition &task, QNetworkReply *reply) {
+    hideLoadingIndicator();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString errStr = reply->errorString();
+        const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        QMessageBox::critical(this,
+                              tr("Error"),
+                              tr("LLM request failed (%1): HTTP status %2")
+                                  .arg(errStr)
+                                  .arg(statusCode));
+        reply->deleteLater();
+        return;
+    }
+
+    const QByteArray respData = reply->readAll();
+    reply->deleteLater();
+
+    const QJsonDocument respDoc = QJsonDocument::fromJson(respData);
+    if (!respDoc.isObject())
+        return;
+    const QJsonObject respObj = respDoc.object();
+    const QJsonArray choices = respObj.value("choices").toArray();
+    if (choices.isEmpty())
+        return;
+    const QJsonObject msg = choices.first().toObject()
+        .value("message")
+        .toObject();
+    const QString result = msg.value("content").toString();
+
+    if (task.insertMode)
+        insertResponse(result);
+    else
+        showResponseWindow(result);
+}
+
+void TaskWindow::insertResponse(const QString &text) {
+#ifdef Q_OS_WIN
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    clipboard->setText(text);
+
+    INPUT pasteInputs[4] = {};
+    pasteInputs[0].type = INPUT_KEYBOARD;
+    pasteInputs[0].ki.wVk = VK_CONTROL;
+    pasteInputs[1].type = INPUT_KEYBOARD;
+    pasteInputs[1].ki.wVk = 'V';
+    pasteInputs[2].type = INPUT_KEYBOARD;
+    pasteInputs[2].ki.wVk = 'V';
+    pasteInputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    pasteInputs[3].type = INPUT_KEYBOARD;
+    pasteInputs[3].ki.wVk = VK_CONTROL;
+    pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(4, pasteInputs, sizeof(INPUT));
+#else
+    Q_UNUSED(text);
+#endif
+}
+
+void TaskWindow::showResponseWindow(const QString &text) {
+    auto *respWin = new QDialog;
+    respWin->setAttribute(Qt::WA_DeleteOnClose, true);
+    respWin->setWindowFlags(respWin->windowFlags() | Qt::Dialog);
+
+    auto *lay = new QVBoxLayout(respWin);
+    auto *edit = new QTextEdit(respWin);
+    QFont font = edit->font();
+    font.setPointSize(12);
+    edit->setFont(font);
+    edit->setPlainText(text);
+    edit->setReadOnly(true);
+    lay->addWidget(edit);
+
+    respWin->setWindowTitle(tr("LLM Response"));
+    respWin->resize(600, 200);
+
+    const QPoint cursorPos = QCursor::pos();
+    moveNearCursor(respWin, cursorPos);
+
+    respWin->show();
+    respWin->raise();
+    respWin->activateWindow();
 }
 
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
@@ -356,9 +347,8 @@ bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
         }
     }
     if (event->type() == QEvent::Enter) {
-        if (auto *btn = qobject_cast<QPushButton *>(watched)) {
+        if (auto *btn = qobject_cast<QPushButton *>(watched))
             btn->setFocus(Qt::MouseFocusReason);
-        }
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -418,7 +408,7 @@ void TaskWindow::hideLoadingIndicator() {
 void TaskWindow::updateLoadingPosition() {
     if (!loadingWindow)
         return;
-    QPoint pos = QCursor::pos();
+    const QPoint pos = QCursor::pos();
     loadingWindow->move(pos.x() + 10, pos.y() + 10);
 }
 
@@ -434,9 +424,8 @@ void TaskWindow::animateLoadingText() {
 }
 
 void TaskWindow::changeEvent(QEvent *event) {
-    if (event->type() == QEvent::ActivationChange && !isActiveWindow()) {
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
         close();
-    }
     QWidget::changeEvent(event);
 }
 

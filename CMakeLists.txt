@@ -17,6 +17,8 @@ set(PROJECT_SOURCES
         mainwindow.cpp
         mainwindow.h
         mainwindow.ui
+        configstore.cpp
+        configstore.h
         taskwidget.cpp
         taskwidget.h
         taskwidget.ui
@@ -56,12 +58,14 @@ target_link_libraries(DesktopLLMHelper
         PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Network
-        user32
 )
+if(WIN32)
+    target_link_libraries(DesktopLLMHelper PRIVATE user32)
+endif()
 
 # Для MSVC: обеспечить корректное значение __cplusplus
 if(MSVC)
-    target_compile_options(DesktopLLMHelper PRIVATE "/Zc:__cplusplus")
+    target_compile_options(DesktopLLMHelper PRIVATE "/permissive-" "/Zc:__cplusplus")
 endif()
 
 if(${QT_VERSION} VERSION_LESS 6.1.0)

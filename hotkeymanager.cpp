@@ -2,7 +2,6 @@
 
 #ifdef Q_OS_WIN
 #include <QMetaObject>
-#include <QDebug>
 
 HHOOK HotkeyManager::s_hook = nullptr;
 HotkeyManager *HotkeyManager::s_instance = nullptr;

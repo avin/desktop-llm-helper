@@ -8,6 +8,8 @@ namespace Ui {
     class TaskWidget;
 }
 
+struct TaskDefinition;
+
 class TaskWidget : public QWidget {
     Q_OBJECT
 
@@ -26,6 +28,9 @@ public:
     double temperature() const;
     void setMaxTokens(int tokens);
     void setTemperature(double temp);
+
+    TaskDefinition toDefinition() const;
+    void applyDefinition(const TaskDefinition &definition);
 
 signals:
     void removeRequested(TaskWidget *task);

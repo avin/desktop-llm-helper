@@ -64,7 +64,7 @@ class HotkeyManager : public QObject
 public:
     explicit HotkeyManager(QObject* parent = nullptr) : QObject(parent) {}
     bool registerHotkey(const QString&) { return false; }
-    bool nativeEventFilter(const QByteArray&, void*, qintptr*) override { return false; }
+    bool nativeEventFilter(const QByteArray&, void*, qintptr*) { return false; }
 
 signals:
     void hotkeyPressed();
