@@ -10,8 +10,14 @@
 #include <QPointer>
 #include <QSize>
 
+#include <windows.h>
+
 #include "configstore.h"
 
+class QByteArray;
+class QHideEvent;
+class QPushButton;
+class QShowEvent;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QTextBrowser;
@@ -38,8 +44,10 @@ signals:
 
 protected:
     void keyPressEvent(QKeyEvent *ev) override;
-    void changeEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
 
 private slots:
     void updateLoadingPosition();
@@ -67,6 +75,14 @@ private:
     QList<ChatMessage> messageHistory;
     bool sawStreamFormat;
     bool requestInFlight;
+    QList<QPushButton *> menuButtons;
+    int menuActiveIndex;
+
+    static TaskWindow *s_activeMenu;
+    static HHOOK s_keyboardHook;
+    static HHOOK s_mouseHook;
+    static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam);
 
     QString captureSelectedText();
     QString applyCharLimit(const QString &text) const;
@@ -91,6 +107,16 @@ private:
     void applyResponsePrefs();
     void handleResponseResize(const QSize &size);
     void handleResponseZoomDelta(int steps);
+    void installMenuHooks();
+    void removeMenuHooks();
+    bool handleHookKey(UINT vk);
+    void handleHookMouseClick(const POINT &pt);
+    bool isPointInsideMenu(const POINT &pt) const;
+    void setMenuActiveIndex(int index);
+    void selectNextMenuItem();
+    void selectPreviousMenuItem();
+    void activateMenuItem();
+    void applyNoActivateStyle();
 
     void showLoadingIndicator();
     void hideLoadingIndicator();

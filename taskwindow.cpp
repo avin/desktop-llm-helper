@@ -28,6 +28,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QScrollBar>
+#include <QStyle>
 #include <QStringList>
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
@@ -327,11 +328,15 @@ const QString &markdownCss() {
 }
 }
 
+TaskWindow *TaskWindow::s_activeMenu = nullptr;
+HHOOK TaskWindow::s_keyboardHook = nullptr;
+HHOOK TaskWindow::s_mouseHook = nullptr;
+
 TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
                        const AppSettings &settings,
                        QWidget *parent)
     : QWidget(parent,
-              Qt::Window | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
+              Qt::Tool | Qt::WindowStaysOnTopHint | Qt::CustomizeWindowHint
               | Qt::FramelessWindowHint)
     , tasks(taskList)
     , activeTaskIndex(-1)
@@ -346,10 +351,12 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , responseView(nullptr)
     , followUpInput(nullptr)
     , sawStreamFormat(false)
-    , requestInFlight(false) {
+    , requestInFlight(false)
+    , menuActiveIndex(-1) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
-    setFocusPolicy(Qt::StrongFocus);
+    setAttribute(Qt::WA_ShowWithoutActivating, true);
+    setFocusPolicy(Qt::NoFocus);
 
     if (!this->settings.proxy.isEmpty()) {
         QUrl proxyUrl(this->settings.proxy);
@@ -361,8 +368,6 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
             networkManager->setProxy(proxy);
         }
     }
-
-    QPushButton *firstButton = nullptr;
 
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(10, 10, 10, 10);
@@ -396,16 +401,16 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
             "   border: 1px solid #adadad;"
             "   background-color: #e1e1e1;"
             "}"
-            "QPushButton:focus {"
+            "QPushButton:focus, QPushButton:hover, QPushButton[menuActive=\"true\"] {"
             "   outline: 0;"
             "   border: 1px solid #0078d7;"
             "   background-color: #e5f1fb;"
             "}"
         );
+        btn->setProperty("menuIndex", i);
         btn->setMouseTracking(true);
         btn->installEventFilter(this);
-        if (!firstButton)
-            firstButton = btn;
+        menuButtons.append(btn);
         connect(btn, &QPushButton::clicked, this, [this, i]() {
             activeTaskIndex = i;
             hide();
@@ -454,15 +459,13 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     const QPoint cursorPos = QCursor::pos();
     moveNearCursor(this, cursorPos);
 
+    applyNoActivateStyle();
     show();
     raise();
-    activateWindow();
-    setFocus(Qt::OtherFocusReason);
-    if (firstButton)
-        firstButton->setFocus(Qt::TabFocusReason);
 }
 
 TaskWindow::~TaskWindow() {
+    removeMenuHooks();
     hideLoadingIndicator();
 }
 
@@ -1025,10 +1028,198 @@ bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
         }
     }
     if (event->type() == QEvent::Enter) {
-        if (auto *btn = qobject_cast<QPushButton *>(watched))
-            btn->setFocus(Qt::MouseFocusReason);
+        if (auto *btn = qobject_cast<QPushButton *>(watched)) {
+            bool ok = false;
+            const int index = btn->property("menuIndex").toInt(&ok);
+            if (ok)
+                setMenuActiveIndex(index);
+        }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void TaskWindow::showEvent(QShowEvent *event) {
+    QWidget::showEvent(event);
+    applyNoActivateStyle();
+    const HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd)
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    setMenuActiveIndex(-1);
+    installMenuHooks();
+}
+
+void TaskWindow::hideEvent(QHideEvent *event) {
+    removeMenuHooks();
+    QWidget::hideEvent(event);
+}
+
+bool TaskWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
+    if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
+        auto *msg = static_cast<MSG *>(message);
+        if (msg && msg->message == WM_MOUSEACTIVATE) {
+            if (result)
+                *result = MA_NOACTIVATE;
+            return true;
+        }
+    }
+    return QWidget::nativeEvent(eventType, message, result);
+}
+
+void TaskWindow::installMenuHooks() {
+    s_activeMenu = this;
+    if (!s_keyboardHook) {
+        s_keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc,
+                                           GetModuleHandleW(nullptr), 0);
+    }
+    if (!s_mouseHook) {
+        s_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc,
+                                        GetModuleHandleW(nullptr), 0);
+    }
+}
+
+void TaskWindow::removeMenuHooks() {
+    if (s_activeMenu != this)
+        return;
+    s_activeMenu = nullptr;
+    if (s_keyboardHook) {
+        UnhookWindowsHookEx(s_keyboardHook);
+        s_keyboardHook = nullptr;
+    }
+    if (s_mouseHook) {
+        UnhookWindowsHookEx(s_mouseHook);
+        s_mouseHook = nullptr;
+    }
+}
+
+LRESULT CALLBACK TaskWindow::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION && s_activeMenu) {
+        const auto *data = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
+        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+            if (s_activeMenu->handleHookKey(static_cast<UINT>(data->vkCode)))
+                return 1;
+        }
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+LRESULT CALLBACK TaskWindow::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION && s_activeMenu) {
+        switch (wParam) {
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_XBUTTONDOWN: {
+                const auto *data = reinterpret_cast<MSLLHOOKSTRUCT *>(lParam);
+                s_activeMenu->handleHookMouseClick(data->pt);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+bool TaskWindow::handleHookKey(UINT vk) {
+    if (!isVisible())
+        return false;
+    const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    switch (vk) {
+        case VK_ESCAPE:
+            close();
+            return true;
+        case VK_TAB:
+            if (shift)
+                selectPreviousMenuItem();
+            else
+                selectNextMenuItem();
+            return true;
+        case VK_LEFT:
+        case VK_UP:
+            selectPreviousMenuItem();
+            return true;
+        case VK_RIGHT:
+        case VK_DOWN:
+            selectNextMenuItem();
+            return true;
+        case VK_RETURN:
+        case VK_SPACE:
+            activateMenuItem();
+            return true;
+        default:
+            return false;
+    }
+}
+
+void TaskWindow::handleHookMouseClick(const POINT &pt) {
+    if (!isVisible())
+        return;
+    if (!isPointInsideMenu(pt))
+        close();
+}
+
+bool TaskWindow::isPointInsideMenu(const POINT &pt) const {
+    const HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd)
+        return false;
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect))
+        return false;
+    return PtInRect(&rect, pt) != 0;
+}
+
+void TaskWindow::setMenuActiveIndex(int index) {
+    if (index < -1 || index >= menuButtons.size())
+        return;
+    if (menuActiveIndex == index)
+        return;
+    menuActiveIndex = index;
+    for (int i = 0; i < menuButtons.size(); ++i) {
+        QPushButton *btn = menuButtons[i];
+        const bool active = (i == menuActiveIndex);
+        if (btn->property("menuActive").toBool() == active)
+            continue;
+        btn->setProperty("menuActive", active);
+        btn->style()->unpolish(btn);
+        btn->style()->polish(btn);
+        btn->update();
+    }
+}
+
+void TaskWindow::selectNextMenuItem() {
+    if (menuButtons.isEmpty())
+        return;
+    if (menuActiveIndex < 0)
+        setMenuActiveIndex(0);
+    else
+        setMenuActiveIndex((menuActiveIndex + 1) % menuButtons.size());
+}
+
+void TaskWindow::selectPreviousMenuItem() {
+    if (menuButtons.isEmpty())
+        return;
+    if (menuActiveIndex < 0)
+        setMenuActiveIndex(menuButtons.size() - 1);
+    else
+        setMenuActiveIndex((menuActiveIndex - 1 + menuButtons.size()) % menuButtons.size());
+}
+
+void TaskWindow::activateMenuItem() {
+    if (menuActiveIndex < 0 || menuActiveIndex >= menuButtons.size())
+        return;
+    menuButtons[menuActiveIndex]->click();
+}
+
+void TaskWindow::applyNoActivateStyle() {
+    const HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd)
+        return;
+    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    const LONG_PTR desired = exStyle | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+    if (desired != exStyle)
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void TaskWindow::showLoadingIndicator() {
@@ -1099,12 +1290,6 @@ void TaskWindow::animateLoadingText() {
         loadingWindow->adjustSize();
         updateLoadingPosition();
     }
-}
-
-void TaskWindow::changeEvent(QEvent *event) {
-    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
-        close();
-    QWidget::changeEvent(event);
 }
 
 void TaskWindow::keyPressEvent(QKeyEvent *ev) {
