@@ -58,6 +58,7 @@ private:
     void insertResponse(const QString &text);
     void ensureResponseWindow();
     void updateResponseView();
+    void applyMarkdownStyles();
     QString extractResponseTextFromJson(const QByteArray &data) const;
     void resetResponseState();
     QString parseStreamDelta(const QByteArray &line);

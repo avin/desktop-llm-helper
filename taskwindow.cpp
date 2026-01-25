@@ -21,9 +21,18 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QScrollBar>
+#include <QStringList>
+#include <QSyntaxHighlighter>
+#include <QTextBlock>
 #include <QTextBrowser>
+#include <QTextDocument>
+#include <QTextFormat>
+#include <QTextCursor>
+#include <QTextFragment>
+#include <QWheelEvent>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -31,6 +40,184 @@
 #include <windows.h>
 
 namespace {
+bool isCodeBlock(const QTextBlock &block) {
+    const QTextBlockFormat format = block.blockFormat();
+    if (format.hasProperty(QTextFormat::BlockCodeFence))
+        return true;
+    if (format.hasProperty(QTextFormat::BlockCodeLanguage))
+        return true;
+    return block.charFormat().fontFixedPitch();
+}
+
+bool isInlineCodeFormat(const QTextCharFormat &format) {
+    if (format.fontFixedPitch())
+        return true;
+    const QFont font = format.font();
+    if (font.fixedPitch())
+        return true;
+    const QString family = font.family();
+    if (family.contains("mono", Qt::CaseInsensitive)
+        || family.contains("courier", Qt::CaseInsensitive)
+        || family.contains("consolas", Qt::CaseInsensitive)) {
+        return true;
+    }
+    const QStringList families = format.fontFamilies().toStringList();
+    for (const QString &entry : families) {
+        if (entry.contains("mono", Qt::CaseInsensitive)
+            || entry.contains("courier", Qt::CaseInsensitive)
+            || entry.contains("consolas", Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    const QVariant hintProp = format.property(QTextFormat::FontStyleHint);
+    if (hintProp.isValid()) {
+        const int hint = hintProp.toInt();
+        if (hint == QFont::TypeWriter || hint == QFont::Monospace)
+            return true;
+    }
+    const QVariant familyProp = format.property(QTextFormat::FontFamily);
+    if (familyProp.isValid()) {
+        const QString propFamily = familyProp.toString();
+        if (propFamily.contains("mono", Qt::CaseInsensitive)
+            || propFamily.contains("courier", Qt::CaseInsensitive)
+            || propFamily.contains("consolas", Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QFont resolveBaseTextFont(QTextDocument *doc) {
+    if (!doc)
+        return QFont();
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        if (isCodeBlock(block))
+            continue;
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (!fragment.isValid())
+                continue;
+            const QTextCharFormat format = fragment.charFormat();
+            if (isInlineCodeFormat(format))
+                continue;
+            const QFont font = format.font();
+            if (font.pointSizeF() > 0 || font.pixelSize() > 0)
+                return font;
+        }
+    }
+    return doc->defaultFont();
+}
+
+class MarkdownCodeHighlighter : public QSyntaxHighlighter {
+public:
+    explicit MarkdownCodeHighlighter(QTextDocument *parent)
+        : QSyntaxHighlighter(parent) {
+        keywordFormat.setForeground(QColor("#d73a49"));
+        keywordFormat.setFontWeight(QFont::Bold);
+
+        stringFormat.setForeground(QColor("#032f62"));
+
+        numberFormat.setForeground(QColor("#005cc5"));
+
+        commentFormat.setForeground(QColor("#6a737d"));
+
+        keywordPatterns = {
+            QRegularExpression("\\b(auto|bool|break|case|catch|class|const|continue|def|default|"
+                               "delete|do|else|enum|export|extends|false|final|finally|for|"
+                               "foreach|from|function|if|implements|import|inline|interface|"
+                               "lambda|let|namespace|new|nullptr|null|operator|private|protected|"
+                               "public|return|static|struct|switch|template|this|throw|true|try|"
+                               "typedef|typename|using|var|virtual|void|volatile|while)\\b")
+        };
+
+        stringPatterns = {
+            QRegularExpression(R"("([^"\\]|\\.)*")"),
+            QRegularExpression(R"('([^'\\]|\\.)*')")
+        };
+
+        numberPattern = QRegularExpression("\\b\\d+(?:\\.\\d+)?\\b");
+        singleLineCommentPatterns = {
+            QRegularExpression("//[^\\n]*"),
+            QRegularExpression("#[^\\n]*")
+        };
+        multiLineCommentStart = QRegularExpression("/\\*");
+        multiLineCommentEnd = QRegularExpression("\\*/");
+    }
+
+protected:
+    void highlightBlock(const QString &text) override {
+        setCurrentBlockState(0);
+        if (!isCodeBlock(currentBlock()))
+            return;
+
+        for (const QRegularExpression &pattern : keywordPatterns) {
+            auto it = pattern.globalMatch(text);
+            while (it.hasNext()) {
+                const QRegularExpressionMatch match = it.next();
+                setFormat(match.capturedStart(), match.capturedLength(), keywordFormat);
+            }
+        }
+
+        for (const QRegularExpression &pattern : stringPatterns) {
+            auto it = pattern.globalMatch(text);
+            while (it.hasNext()) {
+                const QRegularExpressionMatch match = it.next();
+                setFormat(match.capturedStart(), match.capturedLength(), stringFormat);
+            }
+        }
+
+        auto numberIt = numberPattern.globalMatch(text);
+        while (numberIt.hasNext()) {
+            const QRegularExpressionMatch match = numberIt.next();
+            setFormat(match.capturedStart(), match.capturedLength(), numberFormat);
+        }
+
+        for (const QRegularExpression &pattern : singleLineCommentPatterns) {
+            auto it = pattern.globalMatch(text);
+            while (it.hasNext()) {
+                const QRegularExpressionMatch match = it.next();
+                setFormat(match.capturedStart(), match.capturedLength(), commentFormat);
+            }
+        }
+
+        int startIndex = 0;
+        if (previousBlockState() == 1) {
+            startIndex = 0;
+        } else {
+            const QRegularExpressionMatch match = multiLineCommentStart.match(text);
+            startIndex = match.hasMatch() ? match.capturedStart() : -1;
+        }
+
+        while (startIndex >= 0) {
+            const QRegularExpressionMatch endMatch = multiLineCommentEnd.match(text, startIndex);
+            int commentLength = 0;
+            if (endMatch.hasMatch()) {
+                commentLength = endMatch.capturedEnd() - startIndex;
+                setFormat(startIndex, commentLength, commentFormat);
+            } else {
+                setCurrentBlockState(1);
+                commentLength = text.length() - startIndex;
+                setFormat(startIndex, commentLength, commentFormat);
+            }
+            const QRegularExpressionMatch nextStart = multiLineCommentStart.match(text,
+                                                                                  startIndex + commentLength);
+            startIndex = nextStart.hasMatch() ? nextStart.capturedStart() : -1;
+        }
+    }
+
+private:
+    QTextCharFormat keywordFormat;
+    QTextCharFormat stringFormat;
+    QTextCharFormat numberFormat;
+    QTextCharFormat commentFormat;
+    QList<QRegularExpression> keywordPatterns;
+    QList<QRegularExpression> stringPatterns;
+    QRegularExpression numberPattern;
+    QList<QRegularExpression> singleLineCommentPatterns;
+    QRegularExpression multiLineCommentStart;
+    QRegularExpression multiLineCommentEnd;
+};
+
 QPoint clampToScreen(const QPoint &pos, const QSize &size, const QRect &available) {
     int x = pos.x();
     int y = pos.y();
@@ -53,6 +240,28 @@ void moveNearCursor(QWidget *widget, const QPoint &cursorPos) {
         screen = QGuiApplication::primaryScreen();
     const QRect available = screen->availableGeometry();
     widget->move(clampToScreen(cursorPos, widget->size(), available));
+}
+
+const QString &markdownCss() {
+    static const QString css =
+        "body {"
+        "  font-family: 'Segoe UI', 'Noto Sans', Helvetica, Arial;"
+        "  font-size: 12pt;"
+        "  color: #24292f;"
+        "}"
+        "a { color: #0969da; text-decoration: none; }"
+        "a:hover { text-decoration: underline; }"
+        "p { margin: 8px 0; }"
+        "h1 { font-size: 20pt; border-bottom: 1px solid #d0d7de; padding-bottom: 4px; }"
+        "h2 { font-size: 16pt; border-bottom: 1px solid #d0d7de; padding-bottom: 2px; }"
+        "h3 { font-size: 14pt; }"
+        "ul, ol { margin-left: 20px; }"
+        "pre { border: 1px solid #d0d7de; padding: 8px; margin: 8px 0; }"
+        "blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin: 8px 0; padding-left: 8px; }"
+        "table { border-collapse: collapse; }"
+        "th, td { border: 1px solid #d0d7de; padding: 4px 8px; }"
+        "hr { border: 0; border-top: 1px solid #d0d7de; margin: 12px 0; }";
+    return css;
 }
 }
 
@@ -358,10 +567,17 @@ void TaskWindow::ensureResponseWindow() {
     auto *lay = new QVBoxLayout(responseWindow);
     responseView = new QTextBrowser(responseWindow);
     QFont font = responseView->font();
+    font.setFamilies(QStringList{"Segoe UI", "Noto Sans", "Helvetica", "Arial"});
     font.setPointSize(12);
     responseView->setFont(font);
+    responseView->document()->setDefaultFont(font);
     responseView->setReadOnly(true);
     responseView->setOpenExternalLinks(true);
+    responseView->document()->setDefaultStyleSheet(markdownCss());
+    responseView->document()->setDocumentMargin(8);
+    responseView->setStyleSheet("QTextBrowser { background-color: #ffffff; }");
+    responseView->viewport()->installEventFilter(this);
+    new MarkdownCodeHighlighter(responseView->document());
     lay->addWidget(responseView);
 
     responseWindow->setWindowTitle(tr("LLM Response"));
@@ -380,13 +596,56 @@ void TaskWindow::updateResponseView() {
         return;
     QScrollBar *bar = responseView->verticalScrollBar();
     const bool atBottom = bar && bar->value() >= bar->maximum();
-#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
-    responseView->setMarkdown(responseText);
-#else
-    responseView->setPlainText(responseText);
-#endif
+    responseView->document()->setMarkdown(responseText, QTextDocument::MarkdownDialectGitHub);
+    applyMarkdownStyles();
     if (atBottom)
         bar->setValue(bar->maximum());
+}
+
+void TaskWindow::applyMarkdownStyles() {
+    if (!responseView)
+        return;
+    QTextDocument *doc = responseView->document();
+    if (!doc)
+        return;
+
+    QTextCharFormat inlineCodeFormat;
+    inlineCodeFormat.setFontFamilies(QStringList{"Consolas"});
+    inlineCodeFormat.setFontFixedPitch(true);
+    inlineCodeFormat.setBackground(QColor("#f6f8fa"));
+    const QFont baseFont = resolveBaseTextFont(doc);
+    if (baseFont.pointSizeF() > 0) {
+        inlineCodeFormat.setFontPointSize(baseFont.pointSizeF());
+    } else if (baseFont.pixelSize() > 0) {
+        inlineCodeFormat.setProperty(QTextFormat::FontPixelSize, baseFont.pixelSize());
+    }
+
+    QTextCharFormat blockCodeCharFormat = inlineCodeFormat;
+
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        if (isCodeBlock(block)) {
+            QTextCursor blockCursor(block);
+            QTextBlockFormat blockFormat = block.blockFormat();
+            blockFormat.setBackground(QColor("#f6f8fa"));
+            blockCursor.setBlockFormat(blockFormat);
+
+            blockCursor.select(QTextCursor::BlockUnderCursor);
+            blockCursor.mergeCharFormat(blockCodeCharFormat);
+            continue;
+        }
+
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (!fragment.isValid())
+                continue;
+            if (!isInlineCodeFormat(fragment.charFormat()))
+                continue;
+            QTextCursor cursor(doc);
+            cursor.setPosition(fragment.position());
+            cursor.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+            cursor.mergeCharFormat(inlineCodeFormat);
+        }
+    }
 }
 
 QString TaskWindow::extractResponseTextFromJson(const QByteArray &data) const {
@@ -438,6 +697,25 @@ QString TaskWindow::parseStreamDelta(const QByteArray &line) {
 }
 
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (responseView && watched == responseView->viewport() && event->type() == QEvent::Wheel) {
+        auto *wheelEvent = static_cast<QWheelEvent *>(event);
+        if (wheelEvent->modifiers().testFlag(Qt::ControlModifier)) {
+            int delta = wheelEvent->angleDelta().y();
+            if (delta == 0)
+                delta = wheelEvent->pixelDelta().y();
+            if (delta == 0)
+                return true;
+            int steps = qAbs(delta) / 120;
+            if (steps == 0)
+                steps = 1;
+            if (delta > 0)
+                responseView->zoomIn(steps);
+            else
+                responseView->zoomOut(steps);
+            applyMarkdownStyles();
+            return true;
+        }
+    }
     if (event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent*>(event);
         if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
