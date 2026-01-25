@@ -131,7 +131,7 @@ protected:
             if (shouldShowClose(index)) {
                 QStyleOptionTab opt;
                 initStyleOption(&opt, index);
-                QRect closeRect = closeRectForTab(index, opt);
+                QRect closeRect = closeHitRectForTab(index, opt);
                 if (closeRect.contains(event->pos())) {
                     pressIndex = index;
                     update();
@@ -149,7 +149,7 @@ protected:
             pressIndex = -1;
             QStyleOptionTab opt;
             initStyleOption(&opt, index);
-            QRect closeRect = closeRectForTab(index, opt);
+            QRect closeRect = closeHitRectForTab(index, opt);
             bool shouldClose = (tabAt(event->pos()) == index) && closeRect.contains(event->pos());
             updateHoverState(event->pos());
             if (shouldClose && closeRequestHandler) {
@@ -195,6 +195,10 @@ private:
         return 6;
     }
 
+    int closeHitPadding() const {
+        return 4;
+    }
+
     QRect closeRectForTab(int index, const QStyleOptionTab &opt) const {
         QRect rect = tabRect(index);
         int side = closeButtonSide(opt, rect);
@@ -202,6 +206,13 @@ private:
         int x = rect.right() - padding - side;
         int y = rect.center().y() - (side / 2);
         return QRect(x, y, side, side);
+    }
+
+    QRect closeHitRectForTab(int index, const QStyleOptionTab &opt) const {
+        QRect rect = closeRectForTab(index, opt);
+        int padding = closeHitPadding();
+        rect.adjust(-padding, -padding, padding, padding);
+        return rect;
     }
 
     void drawCloseButton(QStylePainter &painter, const QStyleOptionTab &opt,
@@ -243,7 +254,7 @@ private:
         if (hasCloseButton(newHoverIndex)) {
             QStyleOptionTab opt;
             initStyleOption(&opt, newHoverIndex);
-            QRect closeRect = closeRectForTab(newHoverIndex, opt);
+            QRect closeRect = closeHitRectForTab(newHoverIndex, opt);
             if (closeRect.contains(pos))
                 newHoverCloseIndex = newHoverIndex;
         }
