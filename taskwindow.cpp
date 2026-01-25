@@ -295,7 +295,7 @@ const QString &markdownCss() {
         "h2 { font-size: 16pt; border-bottom: 1px solid #d0d7de; padding-bottom: 2px; }"
         "h3 { font-size: 14pt; }"
         "ul, ol { margin-left: 20px; }"
-        "pre { border: 1px solid #d0d7de; padding: 8px; margin: 8px 0; }"
+        "pre { border: 1px solid #d0d7de; padding: 8px; margin: 12px 0; }"
         "blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin: 8px 0; padding-left: 8px; }"
         "table { border-collapse: collapse; }"
         "th, td { border: 1px solid #d0d7de; padding: 4px 8px; }"
@@ -651,6 +651,7 @@ void TaskWindow::applyMarkdownStyles() {
     if (!doc)
         return;
 
+    const qreal codeBlockMargin = 8.0;
     QTextCharFormat inlineCodeFormat;
     inlineCodeFormat.setFontFamilies(QStringList{"Consolas"});
     inlineCodeFormat.setFontFixedPitch(true);
@@ -669,6 +670,12 @@ void TaskWindow::applyMarkdownStyles() {
             QTextCursor blockCursor(block);
             QTextBlockFormat blockFormat = block.blockFormat();
             blockFormat.setBackground(QColor("#f6f8fa"));
+            const QTextBlock prevBlock = block.previous();
+            const QTextBlock nextBlock = block.next();
+            const bool isFirstBlock = !prevBlock.isValid() || !isCodeBlock(prevBlock);
+            const bool isLastBlock = !nextBlock.isValid() || !isCodeBlock(nextBlock);
+            blockFormat.setTopMargin(isFirstBlock ? codeBlockMargin : 0.0);
+            blockFormat.setBottomMargin(isLastBlock ? codeBlockMargin : 0.0);
             blockCursor.setBlockFormat(blockFormat);
 
             blockCursor.select(QTextCursor::BlockUnderCursor);
