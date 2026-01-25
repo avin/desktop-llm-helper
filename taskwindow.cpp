@@ -32,10 +32,11 @@
 #include <QTextFormat>
 #include <QTextCursor>
 #include <QTextFragment>
-#include <QWheelEvent>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <functional>
 
 #include <windows.h>
 
@@ -107,6 +108,44 @@ QFont resolveBaseTextFont(QTextDocument *doc) {
     }
     return doc->defaultFont();
 }
+
+class MarkdownTextBrowser : public QTextBrowser {
+public:
+    explicit MarkdownTextBrowser(QWidget *parent = nullptr)
+        : QTextBrowser(parent) {}
+
+    void setZoomCallback(std::function<void()> callback) {
+        zoomCallback = std::move(callback);
+    }
+
+protected:
+    void wheelEvent(QWheelEvent *event) override {
+        if (event->modifiers().testFlag(Qt::ControlModifier)) {
+            int delta = event->angleDelta().y();
+            if (delta == 0)
+                delta = event->pixelDelta().y();
+            if (delta == 0) {
+                event->accept();
+                return;
+            }
+            int steps = qAbs(delta) / 120;
+            if (steps == 0)
+                steps = 1;
+            if (delta > 0)
+                zoomIn(steps);
+            else
+                zoomOut(steps);
+            if (zoomCallback)
+                zoomCallback();
+            event->accept();
+            return;
+        }
+        QTextBrowser::wheelEvent(event);
+    }
+
+private:
+    std::function<void()> zoomCallback;
+};
 
 class MarkdownCodeHighlighter : public QSyntaxHighlighter {
 public:
@@ -565,7 +604,8 @@ void TaskWindow::ensureResponseWindow() {
     responseWindow->setWindowFlags(responseWindow->windowFlags() | Qt::Dialog);
 
     auto *lay = new QVBoxLayout(responseWindow);
-    responseView = new QTextBrowser(responseWindow);
+    auto *view = new MarkdownTextBrowser(responseWindow);
+    responseView = view;
     QFont font = responseView->font();
     font.setFamilies(QStringList{"Segoe UI", "Noto Sans", "Helvetica", "Arial"});
     font.setPointSize(12);
@@ -576,9 +616,11 @@ void TaskWindow::ensureResponseWindow() {
     responseView->document()->setDefaultStyleSheet(markdownCss());
     responseView->document()->setDocumentMargin(8);
     responseView->setStyleSheet("QTextBrowser { background-color: #ffffff; }");
-    responseView->viewport()->installEventFilter(this);
     new MarkdownCodeHighlighter(responseView->document());
-    lay->addWidget(responseView);
+    view->setZoomCallback([this]() {
+        applyMarkdownStyles();
+    });
+    lay->addWidget(view);
 
     responseWindow->setWindowTitle(tr("LLM Response"));
     responseWindow->resize(600, 200);
@@ -697,25 +739,6 @@ QString TaskWindow::parseStreamDelta(const QByteArray &line) {
 }
 
 bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
-    if (responseView && watched == responseView->viewport() && event->type() == QEvent::Wheel) {
-        auto *wheelEvent = static_cast<QWheelEvent *>(event);
-        if (wheelEvent->modifiers().testFlag(Qt::ControlModifier)) {
-            int delta = wheelEvent->angleDelta().y();
-            if (delta == 0)
-                delta = wheelEvent->pixelDelta().y();
-            if (delta == 0)
-                return true;
-            int steps = qAbs(delta) / 120;
-            if (steps == 0)
-                steps = 1;
-            if (delta > 0)
-                responseView->zoomIn(steps);
-            else
-                responseView->zoomOut(steps);
-            applyMarkdownStyles();
-            return true;
-        }
-    }
     if (event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent*>(event);
         if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
