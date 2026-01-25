@@ -27,9 +27,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-#ifdef Q_OS_WIN
 #include <windows.h>
-#endif
 
 namespace {
 QPoint clampToScreen(const QPoint &pos, const QSize &size, const QRect &available) {
@@ -188,7 +186,6 @@ TaskWindow::~TaskWindow() {
 
 QString TaskWindow::captureSelectedText() {
     QClipboard *clipboard = QGuiApplication::clipboard();
-#ifdef Q_OS_WIN
     clipboard->clear(QClipboard::Clipboard);
     INPUT copyInputs[4] = {};
     copyInputs[0].type = INPUT_KEYBOARD;
@@ -212,9 +209,6 @@ QString TaskWindow::captureSelectedText() {
             return text;
     }
     return QString();
-#else
-    return clipboard->text();
-#endif
 }
 
 QString TaskWindow::applyCharLimit(const QString &text) const {
@@ -290,7 +284,6 @@ void TaskWindow::handleReply(const TaskDefinition &task, QNetworkReply *reply) {
 }
 
 void TaskWindow::insertResponse(const QString &text) {
-#ifdef Q_OS_WIN
     QClipboard *clipboard = QGuiApplication::clipboard();
     clipboard->setText(text);
 
@@ -306,9 +299,6 @@ void TaskWindow::insertResponse(const QString &text) {
     pasteInputs[3].ki.wVk = VK_CONTROL;
     pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, pasteInputs, sizeof(INPUT));
-#else
-    Q_UNUSED(text);
-#endif
 }
 
 void TaskWindow::showResponseWindow(const QString &text) {

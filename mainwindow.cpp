@@ -17,13 +17,10 @@
 #include <QCloseEvent>
 #include <QApplication>
 
-#ifdef Q_OS_WIN
 #include <windows.h>
-#endif
 
 QPointer<MainWindow> MainWindow::instance = nullptr;
 
-#ifdef Q_OS_WIN
 class GlobalKeyInterceptor {
 public:
     static bool capturing;
@@ -139,7 +136,6 @@ public:
 bool GlobalKeyInterceptor::capturing = false;
 HHOOK GlobalKeyInterceptor::hookHandle = nullptr;
 int GlobalKeyInterceptor::modState = 0;
-#endif  // Q_OS_WIN
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -167,25 +163,20 @@ MainWindow::MainWindow(QWidget *parent)
 
     createTrayIcon();
 
-#ifdef Q_OS_WIN
     connect(hotkeyManager, &HotkeyManager::hotkeyPressed,
             this, &MainWindow::handleGlobalHotkey);
-#endif
 
     loadConfig();
     hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
 MainWindow::~MainWindow() {
-#ifdef Q_OS_WIN
     GlobalKeyInterceptor::stop();
-#endif
     delete ui;
     instance = nullptr;
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *ev) {
-#ifdef Q_OS_WIN
     if (obj == ui->lineEditHotkey) {
         if (ev->type() == QEvent::FocusIn) {
             prevHotkey = ui->lineEditHotkey->text();
@@ -198,7 +189,6 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *ev) {
                 ui->lineEditHotkey->setText(prevHotkey);
         }
     }
-#endif
     return QMainWindow::eventFilter(obj, ev);
 }
 

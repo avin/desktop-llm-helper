@@ -1,6 +1,5 @@
 #include "hotkeymanager.h"
 
-#ifdef Q_OS_WIN
 #include <QMetaObject>
 
 HHOOK HotkeyManager::s_hook = nullptr;
@@ -123,4 +122,3 @@ LRESULT CALLBACK HotkeyManager::LowLevelProc(int nCode,
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
-#endif // Q_OS_WIN
