@@ -111,7 +111,14 @@
          </widget>
         </item>
         <item row="4" column="1">
-         <widget class="QLineEdit" name="lineEditMaxChars"/>
+         <widget class="QLineEdit" name="lineEditMaxChars">
+          <property name="maximumSize">
+           <size>
+            <width>200</width>
+            <height>16777215</height>
+           </size>
+          </property>
+         </widget>
         </item>
         <item row="5" column="0">
          <widget class="QLabel" name="labelHotkey">
@@ -121,7 +128,14 @@
          </widget>
         </item>
         <item row="5" column="1">
-         <widget class="QLineEdit" name="lineEditHotkey"/>
+         <widget class="QLineEdit" name="lineEditHotkey">
+          <property name="maximumSize">
+           <size>
+            <width>200</width>
+            <height>16777215</height>
+           </size>
+          </property>
+         </widget>
         </item>
         <item row="6" column="0" colspan="2">
          <spacer name="verticalSpacerSettings">
