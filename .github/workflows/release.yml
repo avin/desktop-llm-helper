@@ -68,11 +68,19 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       shell: pwsh
       run: |
-        $releaseNotes = @"      
-        Download **DesktopLLMHelperInstaller-${{ steps.get_version.outputs.VERSION }}.exe** and run it to install the application.                
+        $releaseNotes = @"
+        ## Added
+        - TBD
+
+        ## Changed
+        - TBD
+
+        ## Fixed
+        - TBD
         "@
         
         gh release create ${{ github.ref_name }} `
           --title "Release ${{ github.ref_name }}" `
           --notes $releaseNotes `
+          --draft `
           installer-output\DesktopLLMHelperInstaller-${{ steps.get_version.outputs.VERSION }}.exe
