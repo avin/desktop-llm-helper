@@ -65,7 +65,7 @@ AppConfig ConfigStore::defaultConfig() {
     config.settings.modelName = "";
     config.settings.apiKey = "YOUR_API_KEY_HERE";
     config.settings.proxy = "";
-    config.settings.hotkey = "Win+Z";
+    config.settings.hotkey = "Ctrl+Shift+Space";
     config.settings.maxChars = 1000;
 
     TaskDefinition task;

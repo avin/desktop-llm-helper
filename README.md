@@ -60,7 +60,7 @@ directly back into your workflow or displayed in an interactive chat dialog.
 
    ![Tasks configuration](.github/img/task.png)
 
-4. Select text in any app and press the configured **hotkey** to open the task menu.
+4. Select text in any app and press the configured **hotkey** (`Ctrl+Shift+Space` by default) to open the task menu.
 
    ![Task menu](.github/img/menu.png)
 
