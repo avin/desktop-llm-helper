@@ -21,6 +21,7 @@ TaskWidget::TaskWidget(QWidget *parent)
       , ui(new Ui::TaskWidget) {
     ui->setupUi(this);
     ui->radioInsert->setChecked(true);
+    ui->textEditPrompt->setAcceptRichText(false);
 
     connect(ui->lineEditName, &QLineEdit::textChanged, this, &TaskWidget::configChanged);
     connect(ui->textEditPrompt, &QTextEdit::textChanged, this, &TaskWidget::configChanged);
