@@ -374,6 +374,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , followUpInput(nullptr)
     , sawStreamFormat(false)
     , requestInFlight(false)
+    , responseScrollDragActive(false)
+    , pendingResponseViewUpdate(false)
     , menuActiveIndex(-1) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
@@ -718,6 +720,18 @@ void TaskWindow::ensureResponseWindow() {
         handleResponseZoomDelta(steps);
     });
     lay->addWidget(view);
+    if (QScrollBar *responseBar = view->verticalScrollBar()) {
+        connect(responseBar, &QScrollBar::sliderPressed, this, [this]() {
+            responseScrollDragActive = true;
+        });
+        connect(responseBar, &QScrollBar::sliderReleased, this, [this]() {
+            responseScrollDragActive = false;
+            if (pendingResponseViewUpdate) {
+                pendingResponseViewUpdate = false;
+                updateResponseView();
+            }
+        });
+    }
 
     auto *input = new QPlainTextEdit(responseWindow);
     input->setPlaceholderText(tr("Type a follow-up message"));
@@ -812,12 +826,29 @@ void TaskWindow::updateResponseView() {
     if (!responseView)
         return;
     QScrollBar *bar = responseView->verticalScrollBar();
-    const bool atBottom = bar && bar->value() >= bar->maximum();
+    if (responseScrollDragActive || (bar && bar->isSliderDown())) {
+        pendingResponseViewUpdate = true;
+        return;
+    }
+    pendingResponseViewUpdate = false;
+    const int prevValue = bar ? bar->value() : 0;
+    const int prevMax = bar ? bar->maximum() : 0;
+    const bool atBottom = bar && (prevMax <= 0 || prevValue >= (prevMax - 2));
     const QString displayText = buildDisplayMarkdown();
     responseView->document()->setMarkdown(displayText, QTextDocument::MarkdownDialectGitHub);
     applyMarkdownStyles();
-    if (atBottom)
+    if (!bar)
+        return;
+    if (atBottom) {
         bar->setValue(bar->maximum());
+        return;
+    }
+    if (prevMax > 0) {
+        const int mappedValue = static_cast<int>((static_cast<qint64>(prevValue) * bar->maximum()) / prevMax);
+        bar->setValue(mappedValue);
+    } else {
+        bar->setValue(prevValue);
+    }
 }
 
 void TaskWindow::applyMarkdownStyles() {
@@ -977,6 +1008,8 @@ void TaskWindow::resetConversationState() {
     messageHistory.clear();
     transcriptText.clear();
     pendingResponseText.clear();
+    responseScrollDragActive = false;
+    pendingResponseViewUpdate = false;
     resetRequestState();
     setRequestInFlight(false);
     if (followUpInput)

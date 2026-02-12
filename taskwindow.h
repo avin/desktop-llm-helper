@@ -77,6 +77,8 @@ private:
     QList<ChatMessage> messageHistory;
     bool sawStreamFormat;
     bool requestInFlight;
+    bool responseScrollDragActive;
+    bool pendingResponseViewUpdate;
     QList<QPushButton *> menuButtons;
     int menuActiveIndex;
 
