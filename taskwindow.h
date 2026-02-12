@@ -101,6 +101,7 @@ private:
     void updateFollowUpHeight();
     void appendMessageToHistory(const QString &role, const QString &content);
     void appendTranscriptBlock(const QString &markdown);
+    QString normalizeMarkdownBlock(const QString &markdown) const;
     QString formatUserMessageBlock(const QString &text) const;
     QString buildDisplayMarkdown() const;
     QString extractResponseTextFromJson(const QByteArray &data) const;

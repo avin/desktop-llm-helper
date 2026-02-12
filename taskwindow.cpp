@@ -946,11 +946,31 @@ void TaskWindow::appendMessageToHistory(const QString &role, const QString &cont
 }
 
 void TaskWindow::appendTranscriptBlock(const QString &markdown) {
-    if (markdown.trimmed().isEmpty())
+    const QString normalized = normalizeMarkdownBlock(markdown);
+    if (normalized.trimmed().isEmpty())
         return;
     if (!transcriptText.isEmpty() && !transcriptText.endsWith("\n\n"))
         transcriptText += "\n\n";
-    transcriptText += markdown;
+    transcriptText += normalized;
+}
+
+QString TaskWindow::normalizeMarkdownBlock(const QString &markdown) const {
+    QString normalized = markdown;
+    normalized.replace("\r\n", "\n");
+    normalized.replace("\r", "\n");
+    int fenceCount = 0;
+    static const QRegularExpression fencePattern(R"((^|\n)\s*```)");
+    auto fenceIt = fencePattern.globalMatch(normalized);
+    while (fenceIt.hasNext()) {
+        fenceIt.next();
+        ++fenceCount;
+    }
+    if (fenceCount % 2 != 0) {
+        if (!normalized.endsWith('\n'))
+            normalized += '\n';
+        normalized += "```";
+    }
+    return normalized;
 }
 
 QString TaskWindow::formatUserMessageBlock(const QString &text) const {
