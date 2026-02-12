@@ -68,7 +68,7 @@ private:
     QPointer<QDialog> responseWindow;
     QPointer<QTextBrowser> responseView;
     QPointer<QPlainTextEdit> followUpInput;
-    QPointer<QPushButton> stopButton;
+    QPointer<QPushButton> actionButton;
     QPointer<QNetworkReply> currentReply;
     QByteArray responseBody;
     QByteArray streamBuffer;
@@ -105,6 +105,7 @@ private:
     void resetRequestState();
     void resetConversationState();
     void setRequestInFlight(bool inFlight);
+    void updateActionButtonState();
     void cancelRequest();
     QString parseStreamDelta(const QByteArray &line);
     void applyResponsePrefs();

@@ -617,6 +617,15 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
 
     if (reply->error() != QNetworkReply::NoError) {
         if (reply->error() == QNetworkReply::OperationCanceledError) {
+            if (task.insertMode) {
+                pendingResponseText.clear();
+            } else {
+                if (!pendingResponseText.isEmpty()) {
+                    appendTranscriptBlock(pendingResponseText);
+                    pendingResponseText.clear();
+                }
+                updateResponseView();
+            }
             reply->deleteLater();
             setRequestInFlight(false);
             return;
@@ -725,6 +734,7 @@ void TaskWindow::ensureResponseWindow() {
     followUpInput = input;
     connect(input, &QPlainTextEdit::textChanged, this, [this]() {
         QTimer::singleShot(0, this, &TaskWindow::updateFollowUpHeight);
+        QTimer::singleShot(0, this, &TaskWindow::updateActionButtonState);
     });
     if (input->document() && input->document()->documentLayout()) {
         connect(input->document()->documentLayout(),
@@ -740,17 +750,46 @@ void TaskWindow::ensureResponseWindow() {
     inputRowLayout->setSpacing(6);
     inputRowLayout->addWidget(input, 1);
 
-    auto *stopBtn = new QPushButton(tr("Stop"), inputRow);
-    QSizePolicy stopPolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-    stopBtn->setSizePolicy(stopPolicy);
-    stopBtn->setMinimumWidth(70);
-    stopBtn->setMaximumWidth(90);
-    stopBtn->setEnabled(requestInFlight);
-    stopButton = stopBtn;
-    connect(stopBtn, &QPushButton::clicked, this, [this]() {
-        cancelRequest();
+    auto *actionBtn = new QPushButton(QStringLiteral("\u279C"), inputRow);
+    actionBtn->setToolTip(tr("Send"));
+    QFont actionFont = actionBtn->font();
+    actionFont.setFamilies(QStringList{"Segoe UI Symbol", "Segoe MDL2 Assets", "Segoe UI"});
+    actionFont.setPointSize(13);
+    actionBtn->setFont(actionFont);
+    QSizePolicy actionPolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    actionBtn->setSizePolicy(actionPolicy);
+    actionBtn->setFixedWidth(44);
+    actionBtn->setStyleSheet(
+        "QPushButton {"
+        "  text-align: center;"
+        "  padding-top: 0px;"
+        "  padding-right: 0px;"
+        "  padding-bottom: 2px;"
+        "  padding-left: 0px;"
+        "  border: 1px solid #8a8a8a;"
+        "  background-color: #f5f5f5;"
+        "  color: #202020;"
+        "}"
+        "QPushButton:hover:enabled {"
+        "  background-color: #ececec;"
+        "}"
+        "QPushButton:pressed:enabled {"
+        "  background-color: #dfdfdf;"
+        "}"
+        "QPushButton:disabled {"
+        "  color: rgba(32, 32, 32, 110);"
+        "  border: 1px solid #d8d8d8;"
+        "  background-color: rgba(245, 245, 245, 160);"
+        "}"
+    );
+    actionButton = actionBtn;
+    connect(actionBtn, &QPushButton::clicked, this, [this]() {
+        if (requestInFlight)
+            cancelRequest();
+        else
+            QTimer::singleShot(0, this, &TaskWindow::sendFollowUpMessage);
     });
-    inputRowLayout->addWidget(stopBtn, 0);
+    inputRowLayout->addWidget(actionBtn, 0);
 
     lay->addWidget(inputRow);
     lay->setStretch(0, 1);
@@ -863,9 +902,9 @@ void TaskWindow::updateFollowUpHeight() {
         followUpInput->setFixedHeight(targetHeight);
         followUpInput->updateGeometry();
     }
-    if (stopButton) {
-        stopButton->setFixedHeight(targetHeight);
-        stopButton->updateGeometry();
+    if (actionButton) {
+        actionButton->setFixedHeight(targetHeight);
+        actionButton->updateGeometry();
     }
 }
 
@@ -928,6 +967,8 @@ void TaskWindow::resetRequestState() {
     sawStreamFormat = false;
     if (currentReply) {
         disconnect(currentReply, nullptr, this, nullptr);
+        currentReply->abort();
+        currentReply->deleteLater();
         currentReply.clear();
     }
 }
@@ -948,8 +989,7 @@ void TaskWindow::setRequestInFlight(bool inFlight) {
     requestInFlight = inFlight;
     if (followUpInput)
         followUpInput->setEnabled(!inFlight);
-    if (stopButton)
-        stopButton->setEnabled(inFlight);
+    updateActionButtonState();
     if (!inFlight && followUpInput && responseWindow && responseWindow->isVisible()) {
         responseWindow->raise();
         responseWindow->activateWindow();
@@ -958,6 +998,23 @@ void TaskWindow::setRequestInFlight(bool inFlight) {
                 followUpInput->setFocus(Qt::OtherFocusReason);
         });
     }
+}
+
+void TaskWindow::updateActionButtonState() {
+    if (!actionButton)
+        return;
+
+    if (requestInFlight) {
+        actionButton->setText(QStringLiteral("\u25A0"));
+        actionButton->setToolTip(tr("Stop"));
+        actionButton->setEnabled(true);
+        return;
+    }
+
+    actionButton->setText(QStringLiteral("\u279C"));
+    actionButton->setToolTip(tr("Send"));
+    const bool hasInputText = followUpInput && !followUpInput->toPlainText().trimmed().isEmpty();
+    actionButton->setEnabled(hasInputText);
 }
 
 void TaskWindow::cancelRequest() {
