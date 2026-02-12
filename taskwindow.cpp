@@ -374,6 +374,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , followUpInput(nullptr)
     , sawStreamFormat(false)
     , requestInFlight(false)
+    , responseScrollDragActive(false)
+    , pendingResponseViewUpdate(false)
     , menuActiveIndex(-1) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
@@ -617,6 +619,15 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
 
     if (reply->error() != QNetworkReply::NoError) {
         if (reply->error() == QNetworkReply::OperationCanceledError) {
+            if (task.insertMode) {
+                pendingResponseText.clear();
+            } else {
+                if (!pendingResponseText.isEmpty()) {
+                    appendTranscriptBlock(pendingResponseText);
+                    pendingResponseText.clear();
+                }
+                updateResponseView();
+            }
             reply->deleteLater();
             setRequestInFlight(false);
             return;
@@ -709,6 +720,18 @@ void TaskWindow::ensureResponseWindow() {
         handleResponseZoomDelta(steps);
     });
     lay->addWidget(view);
+    if (QScrollBar *responseBar = view->verticalScrollBar()) {
+        connect(responseBar, &QScrollBar::sliderPressed, this, [this]() {
+            responseScrollDragActive = true;
+        });
+        connect(responseBar, &QScrollBar::sliderReleased, this, [this]() {
+            responseScrollDragActive = false;
+            if (pendingResponseViewUpdate) {
+                pendingResponseViewUpdate = false;
+                updateResponseView();
+            }
+        });
+    }
 
     auto *input = new QPlainTextEdit(responseWindow);
     input->setPlaceholderText(tr("Type a follow-up message"));
@@ -725,6 +748,7 @@ void TaskWindow::ensureResponseWindow() {
     followUpInput = input;
     connect(input, &QPlainTextEdit::textChanged, this, [this]() {
         QTimer::singleShot(0, this, &TaskWindow::updateFollowUpHeight);
+        QTimer::singleShot(0, this, &TaskWindow::updateActionButtonState);
     });
     if (input->document() && input->document()->documentLayout()) {
         connect(input->document()->documentLayout(),
@@ -740,17 +764,46 @@ void TaskWindow::ensureResponseWindow() {
     inputRowLayout->setSpacing(6);
     inputRowLayout->addWidget(input, 1);
 
-    auto *stopBtn = new QPushButton(tr("Stop"), inputRow);
-    QSizePolicy stopPolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-    stopBtn->setSizePolicy(stopPolicy);
-    stopBtn->setMinimumWidth(70);
-    stopBtn->setMaximumWidth(90);
-    stopBtn->setEnabled(requestInFlight);
-    stopButton = stopBtn;
-    connect(stopBtn, &QPushButton::clicked, this, [this]() {
-        cancelRequest();
+    auto *actionBtn = new QPushButton(QStringLiteral("\u279C"), inputRow);
+    actionBtn->setToolTip(tr("Send"));
+    QFont actionFont = actionBtn->font();
+    actionFont.setFamilies(QStringList{"Segoe UI Symbol", "Segoe MDL2 Assets", "Segoe UI"});
+    actionFont.setPointSize(13);
+    actionBtn->setFont(actionFont);
+    QSizePolicy actionPolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    actionBtn->setSizePolicy(actionPolicy);
+    actionBtn->setFixedWidth(44);
+    actionBtn->setStyleSheet(
+        "QPushButton {"
+        "  text-align: center;"
+        "  padding-top: 0px;"
+        "  padding-right: 0px;"
+        "  padding-bottom: 2px;"
+        "  padding-left: 0px;"
+        "  border: 1px solid #8a8a8a;"
+        "  background-color: #f5f5f5;"
+        "  color: #202020;"
+        "}"
+        "QPushButton:hover:enabled {"
+        "  background-color: #ececec;"
+        "}"
+        "QPushButton:pressed:enabled {"
+        "  background-color: #dfdfdf;"
+        "}"
+        "QPushButton:disabled {"
+        "  color: rgba(32, 32, 32, 110);"
+        "  border: 1px solid #d8d8d8;"
+        "  background-color: rgba(245, 245, 245, 160);"
+        "}"
+    );
+    actionButton = actionBtn;
+    connect(actionBtn, &QPushButton::clicked, this, [this]() {
+        if (requestInFlight)
+            cancelRequest();
+        else
+            QTimer::singleShot(0, this, &TaskWindow::sendFollowUpMessage);
     });
-    inputRowLayout->addWidget(stopBtn, 0);
+    inputRowLayout->addWidget(actionBtn, 0);
 
     lay->addWidget(inputRow);
     lay->setStretch(0, 1);
@@ -773,12 +826,29 @@ void TaskWindow::updateResponseView() {
     if (!responseView)
         return;
     QScrollBar *bar = responseView->verticalScrollBar();
-    const bool atBottom = bar && bar->value() >= bar->maximum();
+    if (responseScrollDragActive || (bar && bar->isSliderDown())) {
+        pendingResponseViewUpdate = true;
+        return;
+    }
+    pendingResponseViewUpdate = false;
+    const int prevValue = bar ? bar->value() : 0;
+    const int prevMax = bar ? bar->maximum() : 0;
+    const bool atBottom = bar && (prevMax <= 0 || prevValue >= (prevMax - 2));
     const QString displayText = buildDisplayMarkdown();
     responseView->document()->setMarkdown(displayText, QTextDocument::MarkdownDialectGitHub);
     applyMarkdownStyles();
-    if (atBottom)
+    if (!bar)
+        return;
+    if (atBottom) {
         bar->setValue(bar->maximum());
+        return;
+    }
+    if (prevMax > 0) {
+        const int mappedValue = static_cast<int>((static_cast<qint64>(prevValue) * bar->maximum()) / prevMax);
+        bar->setValue(mappedValue);
+    } else {
+        bar->setValue(prevValue);
+    }
 }
 
 void TaskWindow::applyMarkdownStyles() {
@@ -863,9 +933,9 @@ void TaskWindow::updateFollowUpHeight() {
         followUpInput->setFixedHeight(targetHeight);
         followUpInput->updateGeometry();
     }
-    if (stopButton) {
-        stopButton->setFixedHeight(targetHeight);
-        stopButton->updateGeometry();
+    if (actionButton) {
+        actionButton->setFixedHeight(targetHeight);
+        actionButton->updateGeometry();
     }
 }
 
@@ -876,11 +946,31 @@ void TaskWindow::appendMessageToHistory(const QString &role, const QString &cont
 }
 
 void TaskWindow::appendTranscriptBlock(const QString &markdown) {
-    if (markdown.trimmed().isEmpty())
+    const QString normalized = normalizeMarkdownBlock(markdown);
+    if (normalized.trimmed().isEmpty())
         return;
     if (!transcriptText.isEmpty() && !transcriptText.endsWith("\n\n"))
         transcriptText += "\n\n";
-    transcriptText += markdown;
+    transcriptText += normalized;
+}
+
+QString TaskWindow::normalizeMarkdownBlock(const QString &markdown) const {
+    QString normalized = markdown;
+    normalized.replace("\r\n", "\n");
+    normalized.replace("\r", "\n");
+    int fenceCount = 0;
+    static const QRegularExpression fencePattern(R"((^|\n)\s*```)");
+    auto fenceIt = fencePattern.globalMatch(normalized);
+    while (fenceIt.hasNext()) {
+        fenceIt.next();
+        ++fenceCount;
+    }
+    if (fenceCount % 2 != 0) {
+        if (!normalized.endsWith('\n'))
+            normalized += '\n';
+        normalized += "```";
+    }
+    return normalized;
 }
 
 QString TaskWindow::formatUserMessageBlock(const QString &text) const {
@@ -928,6 +1018,8 @@ void TaskWindow::resetRequestState() {
     sawStreamFormat = false;
     if (currentReply) {
         disconnect(currentReply, nullptr, this, nullptr);
+        currentReply->abort();
+        currentReply->deleteLater();
         currentReply.clear();
     }
 }
@@ -936,6 +1028,8 @@ void TaskWindow::resetConversationState() {
     messageHistory.clear();
     transcriptText.clear();
     pendingResponseText.clear();
+    responseScrollDragActive = false;
+    pendingResponseViewUpdate = false;
     resetRequestState();
     setRequestInFlight(false);
     if (followUpInput)
@@ -948,8 +1042,7 @@ void TaskWindow::setRequestInFlight(bool inFlight) {
     requestInFlight = inFlight;
     if (followUpInput)
         followUpInput->setEnabled(!inFlight);
-    if (stopButton)
-        stopButton->setEnabled(inFlight);
+    updateActionButtonState();
     if (!inFlight && followUpInput && responseWindow && responseWindow->isVisible()) {
         responseWindow->raise();
         responseWindow->activateWindow();
@@ -958,6 +1051,23 @@ void TaskWindow::setRequestInFlight(bool inFlight) {
                 followUpInput->setFocus(Qt::OtherFocusReason);
         });
     }
+}
+
+void TaskWindow::updateActionButtonState() {
+    if (!actionButton)
+        return;
+
+    if (requestInFlight) {
+        actionButton->setText(QStringLiteral("\u25A0"));
+        actionButton->setToolTip(tr("Stop"));
+        actionButton->setEnabled(true);
+        return;
+    }
+
+    actionButton->setText(QStringLiteral("\u279C"));
+    actionButton->setToolTip(tr("Send"));
+    const bool hasInputText = followUpInput && !followUpInput->toPlainText().trimmed().isEmpty();
+    actionButton->setEnabled(hasInputText);
 }
 
 void TaskWindow::cancelRequest() {

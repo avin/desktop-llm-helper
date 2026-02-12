@@ -68,7 +68,7 @@ private:
     QPointer<QDialog> responseWindow;
     QPointer<QTextBrowser> responseView;
     QPointer<QPlainTextEdit> followUpInput;
-    QPointer<QPushButton> stopButton;
+    QPointer<QPushButton> actionButton;
     QPointer<QNetworkReply> currentReply;
     QByteArray responseBody;
     QByteArray streamBuffer;
@@ -77,6 +77,8 @@ private:
     QList<ChatMessage> messageHistory;
     bool sawStreamFormat;
     bool requestInFlight;
+    bool responseScrollDragActive;
+    bool pendingResponseViewUpdate;
     QList<QPushButton *> menuButtons;
     int menuActiveIndex;
 
@@ -99,12 +101,14 @@ private:
     void updateFollowUpHeight();
     void appendMessageToHistory(const QString &role, const QString &content);
     void appendTranscriptBlock(const QString &markdown);
+    QString normalizeMarkdownBlock(const QString &markdown) const;
     QString formatUserMessageBlock(const QString &text) const;
     QString buildDisplayMarkdown() const;
     QString extractResponseTextFromJson(const QByteArray &data) const;
     void resetRequestState();
     void resetConversationState();
     void setRequestInFlight(bool inFlight);
+    void updateActionButtonState();
     void cancelRequest();
     QString parseStreamDelta(const QByteArray &line);
     void applyResponsePrefs();
