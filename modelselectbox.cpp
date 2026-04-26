@@ -10,6 +10,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -318,6 +319,24 @@ bool ModelSelectBox::eventFilter(QObject *watched, QEvent *event) {
     if (watched == popup && event->type() == QEvent::Hide)
         hideTooltip();
 
+    if (watched == searchEdit && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        switch (keyEvent->key()) {
+        case Qt::Key_Down:
+            moveCurrentIndex(1);
+            return true;
+        case Qt::Key_Up:
+            moveCurrentIndex(-1);
+            return true;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            activateCurrentIndex();
+            return true;
+        default:
+            break;
+        }
+    }
+
     if (modelListView && watched == modelListView->viewport()) {
         if (event->type() == QEvent::MouseMove) {
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
@@ -397,6 +416,7 @@ void ModelSelectBox::ensurePopup() {
 
     searchEdit = new QLineEdit(popup);
     searchEdit->setPlaceholderText(QStringLiteral("Search models"));
+    searchEdit->installEventFilter(this);
     layout->addWidget(searchEdit);
 
     stack = new QStackedWidget(popup);
@@ -587,6 +607,31 @@ void ModelSelectBox::updateCurrentIndexLater() {
         if (popup && popup->isVisible() && modelListView && stack->currentWidget() == modelListView)
             updateCurrentIndex();
     });
+}
+
+void ModelSelectBox::moveCurrentIndex(int delta) {
+    if (!modelListView || !proxyModel || proxyModel->rowCount() == 0)
+        return;
+
+    const QModelIndex currentIndex = modelListView->currentIndex();
+    const int currentRow = currentIndex.isValid() ? currentIndex.row() : 0;
+    const int nextRow = qBound(0, currentRow + delta, proxyModel->rowCount() - 1);
+    const QModelIndex nextIndex = proxyModel->index(nextRow, 0);
+    if (!nextIndex.isValid())
+        return;
+
+    modelListView->selectionModel()->setCurrentIndex(
+        nextIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    modelListView->scrollTo(nextIndex, QAbstractItemView::EnsureVisible);
+}
+
+void ModelSelectBox::activateCurrentIndex() {
+    if (!modelListView)
+        return;
+
+    const QModelIndex currentIndex = modelListView->currentIndex();
+    if (currentIndex.isValid())
+        chooseModel(currentIndex.data(ModelIdRole).toString());
 }
 
 bool ModelSelectBox::isInfoArea(const QModelIndex &viewIndex, const QPoint &pos) const {

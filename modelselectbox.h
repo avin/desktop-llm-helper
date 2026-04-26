@@ -71,6 +71,8 @@ private:
     void hideTooltip();
     void updateCurrentIndex();
     void updateCurrentIndexLater();
+    void moveCurrentIndex(int delta);
+    void activateCurrentIndex();
     bool isInfoArea(const QModelIndex &viewIndex, const QPoint &pos) const;
     ModelInfo modelForIndex(const QModelIndex &viewIndex) const;
 };
