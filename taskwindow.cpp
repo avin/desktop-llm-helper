@@ -464,6 +464,7 @@ TaskRequestWorker::TaskRequestWorker(QObject *parent)
 }
 
 void TaskRequestWorker::startRequest(const QUrl &url,
+                                     int requestId,
                                      const QByteArray &authorizationHeader,
                                      const QByteArray &body,
                                      const QString &proxyText) {
@@ -480,14 +481,18 @@ void TaskRequestWorker::startRequest(const QUrl &url,
 
     QNetworkReply *newReply = networkManager->post(request, body);
     reply = newReply;
-    connect(newReply, &QNetworkReply::readyRead, this, [this, requestReply = QPointer<QNetworkReply>(newReply)]() {
+    connect(newReply, &QNetworkReply::readyRead, this, [this,
+                                                        requestId,
+                                                        requestReply = QPointer<QNetworkReply>(newReply)]() {
         if (!requestReply || reply != requestReply)
             return;
         const QByteArray chunk = requestReply->readAll();
         if (!chunk.isEmpty())
-            emit readyRead(chunk);
+            emit readyRead(requestId, chunk);
     });
-    connect(newReply, &QNetworkReply::finished, this, [this, requestReply = QPointer<QNetworkReply>(newReply)]() {
+    connect(newReply, &QNetworkReply::finished, this, [this,
+                                                       requestId,
+                                                       requestReply = QPointer<QNetworkReply>(newReply)]() {
         if (!requestReply)
             return;
         if (reply != requestReply) {
@@ -497,14 +502,14 @@ void TaskRequestWorker::startRequest(const QUrl &url,
 
         const QByteArray chunk = requestReply->readAll();
         if (!chunk.isEmpty())
-            emit readyRead(chunk);
+            emit readyRead(requestId, chunk);
 
         const int error = static_cast<int>(requestReply->error());
         const QString errorString = requestReply->errorString();
         const int statusCode = requestReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         requestReply->deleteLater();
         reply.clear();
-        emit finished(error, errorString, statusCode);
+        emit finished(requestId, error, errorString, statusCode);
     });
 }
 
@@ -561,6 +566,7 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , responseWindow(nullptr)
     , responseView(nullptr)
     , followUpInput(nullptr)
+    , currentRequestId(0)
     , sawStreamFormat(false)
     , requestInFlight(false)
     , responseScrollDragActive(false)
@@ -792,11 +798,13 @@ void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
     if (!task.insertMode)
         body["stream"] = true;
     QJsonDocument bodyDoc(body);
+    const int requestId = ++currentRequestId;
 
     QMetaObject::invokeMethod(requestWorker,
                               "startRequest",
                               Qt::QueuedConnection,
                               Q_ARG(QUrl, requestUrl),
+                              Q_ARG(int, requestId),
                               Q_ARG(QByteArray, "Bearer " + settings.apiKey.toUtf8()),
                               Q_ARG(QByteArray, bodyDoc.toJson()),
                               Q_ARG(QString, settings.proxy));
@@ -823,7 +831,9 @@ void TaskWindow::sendFollowUpMessage() {
     sendRequestWithHistory(tasks.at(activeTaskIndex));
 }
 
-void TaskWindow::handleRequestReadyRead(const QByteArray &chunk) {
+void TaskWindow::handleRequestReadyRead(int requestId, const QByteArray &chunk) {
+    if (requestId != currentRequestId)
+        return;
     if (chunk.isEmpty())
         return;
 
@@ -857,7 +867,13 @@ void TaskWindow::handleRequestReadyRead(const QByteArray &chunk) {
         updateResponseView();
 }
 
-void TaskWindow::handleRequestFinished(int error, const QString &errorString, int statusCode) {
+void TaskWindow::handleRequestFinished(int requestId,
+                                       int error,
+                                       const QString &errorString,
+                                       int statusCode) {
+    if (requestId != currentRequestId)
+        return;
+
     hideLoadingIndicator();
     hideReplyIndicator();
 
@@ -875,7 +891,11 @@ void TaskWindow::handleRequestFinished(int error, const QString &errorString, in
             } else {
                 if (!pendingResponseText.isEmpty()) {
                     appendTranscriptBlock(pendingResponseText);
+                    appendMessageToHistory("assistant", pendingResponseText);
                     pendingResponseText.clear();
+                } else {
+                    appendTranscriptBlock(QStringLiteral("*Response canceled*"));
+                    appendMessageToHistory("assistant", QStringLiteral("Response canceled by user."));
                 }
                 updateResponseView();
             }
