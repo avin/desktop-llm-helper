@@ -299,6 +299,8 @@ void ModelSelectBox::setModels(const ModelInfoList &models) {
     modelListModel->setModels(loadedModels);
     rebuildRows();
     stack->setCurrentWidget(modelListView);
+    searchEdit->setFocus(Qt::PopupFocusReason);
+    searchEdit->selectAll();
     updateCurrentIndexLater();
 }
 
@@ -307,6 +309,7 @@ void ModelSelectBox::setLoadError(const QString &message) {
     if (!popup)
         return;
     searchEdit->setEnabled(true);
+    searchEdit->setFocus(Qt::PopupFocusReason);
     loadingLabel->setText(message.trimmed().isEmpty() ? QStringLiteral("Failed to load models.") : message);
     stack->setCurrentWidget(loadingPage);
 }
@@ -429,6 +432,11 @@ void ModelSelectBox::ensurePopup() {
 
     connect(searchEdit, &QLineEdit::textChanged, this, &ModelSelectBox::rebuildRows);
     connect(modelListView, &QListView::clicked, this, [this](const QModelIndex &index) {
+        if (!index.isValid())
+            return;
+        chooseModel(index.data(ModelIdRole).toString());
+    });
+    connect(modelListView, &QListView::activated, this, [this](const QModelIndex &index) {
         if (!index.isValid())
             return;
         chooseModel(index.data(ModelIdRole).toString());
