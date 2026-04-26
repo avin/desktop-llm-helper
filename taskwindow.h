@@ -22,10 +22,36 @@ class QPushButton;
 class QShowEvent;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QThread;
 class QTextBrowser;
 class QDialog;
 class QPlainTextEdit;
 class QMimeData;
+class QUrl;
+
+class TaskRequestWorker : public QObject {
+    Q_OBJECT
+
+public:
+    explicit TaskRequestWorker(QObject *parent = nullptr);
+
+public slots:
+    void startRequest(const QUrl &url,
+                      const QByteArray &authorizationHeader,
+                      const QByteArray &body,
+                      const QString &proxyText);
+    void abortRequest();
+
+signals:
+    void readyRead(const QByteArray &chunk);
+    void finished(int error, const QString &errorString, int statusCode);
+
+private:
+    QNetworkAccessManager *networkManager;
+    QPointer<QNetworkReply> reply;
+
+    void applyProxy(const QString &proxyText);
+};
 
 struct ChatMessage {
     QString role;
@@ -59,9 +85,11 @@ private slots:
 
 private:
     QList<TaskDefinition> tasks;
+    TaskDefinition activeRequestTask;
     int activeTaskIndex;
     AppSettings settings;
-    QNetworkAccessManager *networkManager;
+    QThread *requestThread;
+    TaskRequestWorker *requestWorker;
     QWidget *loadingWindow;
     QTimer *loadingTimer;
     QLabel *loadingLabel;
@@ -72,7 +100,6 @@ private:
     QPointer<QTextBrowser> responseView;
     QPointer<QPlainTextEdit> followUpInput;
     QPointer<QPushButton> actionButton;
-    QPointer<QNetworkReply> currentReply;
     QByteArray responseBody;
     QByteArray streamBuffer;
     QString transcriptText;
@@ -104,8 +131,8 @@ private:
     QString applyCharLimit(const QString &text) const;
     void startConversation(const TaskDefinition &task, const QString &originalText);
     void sendRequestWithHistory(const TaskDefinition &task);
-    void handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply);
-    void handleReplyFinished(const TaskDefinition &task, QNetworkReply *reply);
+    void handleRequestReadyRead(const QByteArray &chunk);
+    void handleRequestFinished(int error, const QString &errorString, int statusCode);
     void insertResponse(const QString &text);
     void ensureResponseWindow();
     void updateResponseView();

@@ -18,6 +18,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
@@ -39,6 +40,7 @@
 #include <QTextCursor>
 #include <QTextFragment>
 #include <QTextLayout>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
@@ -456,6 +458,88 @@ HHOOK TaskWindow::s_keyboardHook = nullptr;
 HHOOK TaskWindow::s_mouseHook = nullptr;
 HHOOK TaskWindow::s_operationKeyboardHook = nullptr;
 
+TaskRequestWorker::TaskRequestWorker(QObject *parent)
+    : QObject(parent)
+    , networkManager(nullptr) {
+}
+
+void TaskRequestWorker::startRequest(const QUrl &url,
+                                     const QByteArray &authorizationHeader,
+                                     const QByteArray &body,
+                                     const QString &proxyText) {
+    if (reply)
+        reply->abort();
+
+    if (!networkManager)
+        networkManager = new QNetworkAccessManager(this);
+    applyProxy(proxyText);
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Authorization", authorizationHeader);
+
+    QNetworkReply *newReply = networkManager->post(request, body);
+    reply = newReply;
+    connect(newReply, &QNetworkReply::readyRead, this, [this, requestReply = QPointer<QNetworkReply>(newReply)]() {
+        if (!requestReply || reply != requestReply)
+            return;
+        const QByteArray chunk = requestReply->readAll();
+        if (!chunk.isEmpty())
+            emit readyRead(chunk);
+    });
+    connect(newReply, &QNetworkReply::finished, this, [this, requestReply = QPointer<QNetworkReply>(newReply)]() {
+        if (!requestReply)
+            return;
+        if (reply != requestReply) {
+            requestReply->deleteLater();
+            return;
+        }
+
+        const QByteArray chunk = requestReply->readAll();
+        if (!chunk.isEmpty())
+            emit readyRead(chunk);
+
+        const int error = static_cast<int>(requestReply->error());
+        const QString errorString = requestReply->errorString();
+        const int statusCode = requestReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        requestReply->deleteLater();
+        reply.clear();
+        emit finished(error, errorString, statusCode);
+    });
+}
+
+void TaskRequestWorker::abortRequest() {
+    if (reply)
+        reply->abort();
+}
+
+void TaskRequestWorker::applyProxy(const QString &proxyText) {
+    if (!networkManager)
+        return;
+
+    const QString trimmed = proxyText.trimmed();
+    if (trimmed.isEmpty()) {
+        QNetworkProxy proxy;
+        proxy.setType(QNetworkProxy::NoProxy);
+        networkManager->setProxy(proxy);
+        return;
+    }
+
+    const QUrl proxyUrl(trimmed);
+    if (!proxyUrl.isValid()) {
+        QNetworkProxy proxy;
+        proxy.setType(QNetworkProxy::NoProxy);
+        networkManager->setProxy(proxy);
+        return;
+    }
+
+    QNetworkProxy proxy;
+    proxy.setType(QNetworkProxy::HttpProxy);
+    proxy.setHostName(proxyUrl.host());
+    proxy.setPort(proxyUrl.port());
+    networkManager->setProxy(proxy);
+}
+
 TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
                        const AppSettings &settings,
                        QWidget *parent)
@@ -465,7 +549,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , tasks(taskList)
     , activeTaskIndex(-1)
     , settings(settings)
-    , networkManager(new QNetworkAccessManager(this))
+    , requestThread(new QThread(this))
+    , requestWorker(new TaskRequestWorker)
     , loadingWindow(nullptr)
     , loadingTimer(nullptr)
     , loadingLabel(nullptr)
@@ -485,16 +570,13 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     setAttribute(Qt::WA_ShowWithoutActivating, true);
     setFocusPolicy(Qt::NoFocus);
 
-    if (!this->settings.proxy.isEmpty()) {
-        QUrl proxyUrl(this->settings.proxy);
-        if (proxyUrl.isValid()) {
-            QNetworkProxy proxy;
-            proxy.setType(QNetworkProxy::HttpProxy);
-            proxy.setHostName(proxyUrl.host());
-            proxy.setPort(proxyUrl.port());
-            networkManager->setProxy(proxy);
-        }
-    }
+    requestWorker->moveToThread(requestThread);
+    connect(requestThread, &QThread::finished, requestWorker, &QObject::deleteLater);
+    connect(requestWorker, &TaskRequestWorker::readyRead,
+            this, &TaskWindow::handleRequestReadyRead);
+    connect(requestWorker, &TaskRequestWorker::finished,
+            this, &TaskWindow::handleRequestFinished);
+    requestThread->start();
 
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(10, 10, 10, 10);
@@ -575,6 +657,15 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
 
 TaskWindow::~TaskWindow() {
     removeOperationCancelHook();
+    if (requestWorker) {
+        QMetaObject::invokeMethod(requestWorker,
+                                  "abortRequest",
+                                  Qt::BlockingQueuedConnection);
+    }
+    if (requestThread) {
+        requestThread->quit();
+        requestThread->wait();
+    }
     restoreOriginalClipboard();
     clearOriginalClipboardSnapshot();
     removeMenuHooks();
@@ -667,12 +758,10 @@ void TaskWindow::startConversation(const TaskDefinition &task, const QString &or
 
 void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
     resetRequestState();
+    activeRequestTask = task;
     setRequestInFlight(true);
 
     const QUrl requestUrl = buildApiUrl(settings.apiEndpoint, "chat/completions");
-    QNetworkRequest request(requestUrl);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", "Bearer " + settings.apiKey.toUtf8());
 
     QJsonArray messagesArray;
     for (const ChatMessage &msg : messageHistory) {
@@ -695,14 +784,13 @@ void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
         body["stream"] = true;
     QJsonDocument bodyDoc(body);
 
-    QNetworkReply *reply = networkManager->post(request, bodyDoc.toJson());
-    currentReply = reply;
-    connect(reply, &QNetworkReply::readyRead, this, [this, task, reply]() {
-        handleReplyReadyRead(task, reply);
-    });
-    connect(reply, &QNetworkReply::finished, this, [this, task, reply]() {
-        handleReplyFinished(task, reply);
-    });
+    QMetaObject::invokeMethod(requestWorker,
+                              "startRequest",
+                              Qt::QueuedConnection,
+                              Q_ARG(QUrl, requestUrl),
+                              Q_ARG(QByteArray, "Bearer " + settings.apiKey.toUtf8()),
+                              Q_ARG(QByteArray, bodyDoc.toJson()),
+                              Q_ARG(QString, settings.proxy));
 }
 
 void TaskWindow::sendFollowUpMessage() {
@@ -726,8 +814,7 @@ void TaskWindow::sendFollowUpMessage() {
     sendRequestWithHistory(tasks.at(activeTaskIndex));
 }
 
-void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply) {
-    const QByteArray chunk = reply->readAll();
+void TaskWindow::handleRequestReadyRead(const QByteArray &chunk) {
     if (chunk.isEmpty())
         return;
 
@@ -750,17 +837,15 @@ void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply 
 
     if (sawStreamFormat) {
         hideLoadingIndicator();
-        if (!task.insertMode)
+        if (!activeRequestTask.insertMode)
             ensureResponseWindow();
     }
 
-    if (appended && !task.insertMode)
+    if (appended && !activeRequestTask.insertMode)
         updateResponseView();
 }
 
-void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *reply) {
-    if (reply == currentReply)
-        currentReply = nullptr;
+void TaskWindow::handleRequestFinished(int error, const QString &errorString, int statusCode) {
     hideLoadingIndicator();
 
     if (!streamBuffer.isEmpty()) {
@@ -770,9 +855,9 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
         streamBuffer.clear();
     }
 
-    if (reply->error() != QNetworkReply::NoError) {
-        if (reply->error() == QNetworkReply::OperationCanceledError) {
-            if (task.insertMode) {
+    if (error != QNetworkReply::NoError) {
+        if (error == QNetworkReply::OperationCanceledError) {
+            if (activeRequestTask.insertMode) {
                 pendingResponseText.clear();
             } else {
                 if (!pendingResponseText.isEmpty()) {
@@ -781,19 +866,15 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
                 }
                 updateResponseView();
             }
-            reply->deleteLater();
             setRequestInFlight(false);
             clearOriginalClipboardSnapshot();
             return;
         }
-        const QString errStr = reply->errorString();
-        const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         QMessageBox::critical(this,
                               tr("Error"),
                               tr("LLM request failed (%1): HTTP status %2")
-                                  .arg(errStr)
+                                  .arg(errorString)
                                   .arg(statusCode));
-        reply->deleteLater();
         setRequestInFlight(false);
         clearOriginalClipboardSnapshot();
         return;
@@ -803,12 +884,10 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
         pendingResponseText = extractResponseTextFromJson(responseBody);
     }
 
-    reply->deleteLater();
-
     if (!pendingResponseText.isEmpty())
         appendMessageToHistory("assistant", pendingResponseText);
 
-    if (task.insertMode) {
+    if (activeRequestTask.insertMode) {
         if (!pendingResponseText.isEmpty()) {
             insertResponse(pendingResponseText);
         } else {
@@ -1178,11 +1257,10 @@ void TaskWindow::resetRequestState() {
     streamBuffer.clear();
     pendingResponseText.clear();
     sawStreamFormat = false;
-    if (currentReply) {
-        disconnect(currentReply, nullptr, this, nullptr);
-        currentReply->abort();
-        currentReply->deleteLater();
-        currentReply.clear();
+    if (requestInFlight && requestWorker) {
+        QMetaObject::invokeMethod(requestWorker,
+                                  "abortRequest",
+                                  Qt::QueuedConnection);
     }
 }
 
@@ -1246,11 +1324,11 @@ void TaskWindow::updateActionButtonState() {
 void TaskWindow::cancelRequest() {
     if (!requestInFlight)
         return;
-    if (currentReply) {
-        currentReply->abort();
-        return;
+    if (requestWorker) {
+        QMetaObject::invokeMethod(requestWorker,
+                                  "abortRequest",
+                                  Qt::QueuedConnection);
     }
-    setRequestInFlight(false);
 }
 
 QString TaskWindow::parseStreamDelta(const QByteArray &line) {
