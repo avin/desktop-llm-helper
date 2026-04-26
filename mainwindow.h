@@ -61,9 +61,22 @@ signals:
                                 const QString &apiKey, const QString &proxyText);
 
 private:
+    struct ModelListRequestParams {
+        QString baseUrl;
+        QString apiKey;
+        QString proxyText;
+
+        bool operator==(const ModelListRequestParams &other) const {
+            return baseUrl == other.baseUrl
+                && apiKey == other.apiKey
+                && proxyText == other.proxyText;
+        }
+    };
+
     struct PendingModelRequest {
         QPointer<ModelSelectBox> target;
         int generation = 0;
+        ModelListRequestParams params;
     };
 
     Ui::MainWindow *ui;
@@ -77,6 +90,9 @@ private:
     ModelListLoader *modelListLoader;
     int nextModelRequestId;
     QHash<int, PendingModelRequest> pendingModelRequests;
+    bool hasCachedModelList;
+    ModelListRequestParams cachedModelListParams;
+    ModelInfoList cachedModelList;
 
     void createTrayIcon();
     void loadConfig();

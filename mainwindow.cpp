@@ -396,7 +396,8 @@ MainWindow::MainWindow(QWidget *parent)
       , menuWindow(nullptr)
       , modelLoaderThread(new QThread(this))
       , modelListLoader(new ModelListLoader)
-      , nextModelRequestId(0) {
+      , nextModelRequestId(0)
+      , hasCachedModelList(false) {
     instance = this;
     qRegisterMetaType<ModelInfoList>("ModelInfoList");
     ui->setupUi(this);
@@ -780,16 +781,31 @@ void MainWindow::requestModelList(ModelSelectBox *target, int generation) {
     if (!targetSelector)
         return;
 
+    const ModelListRequestParams params{
+        ui->lineEditApiEndpoint->text().trimmed(),
+        ui->lineEditApiKey->text().trimmed(),
+        ui->lineEditProxy->text().trimmed()
+    };
+
+    if (hasCachedModelList && cachedModelListParams == params) {
+        targetSelector->setModels(cachedModelList);
+        return;
+    }
+
     const int requestId = ++nextModelRequestId;
-    pendingModelRequests.insert(requestId, PendingModelRequest{targetSelector, generation});
-    emit modelListLoadRequested(requestId,
-                                ui->lineEditApiEndpoint->text(),
-                                ui->lineEditApiKey->text(),
-                                ui->lineEditProxy->text());
+    pendingModelRequests.insert(requestId, PendingModelRequest{targetSelector, generation, params});
+    emit modelListLoadRequested(requestId, params.baseUrl, params.apiKey, params.proxyText);
 }
 
 void MainWindow::handleModelListLoaded(int requestId, const ModelInfoList &models) {
+    if (!pendingModelRequests.contains(requestId))
+        return;
+
     const PendingModelRequest request = pendingModelRequests.take(requestId);
+    hasCachedModelList = true;
+    cachedModelListParams = request.params;
+    cachedModelList = models;
+
     if (!request.target || request.target->currentReloadGeneration() != request.generation)
         return;
 
@@ -797,6 +813,9 @@ void MainWindow::handleModelListLoaded(int requestId, const ModelInfoList &model
 }
 
 void MainWindow::handleModelListFailed(int requestId, const QString &message) {
+    if (!pendingModelRequests.contains(requestId))
+        return;
+
     const PendingModelRequest request = pendingModelRequests.take(requestId);
     if (!request.target || request.target->currentReloadGeneration() != request.generation)
         return;

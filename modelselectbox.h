@@ -1,15 +1,19 @@
 #ifndef MODELSELECTBOX_H
 #define MODELSELECTBOX_H
 
+#include <QPoint>
 #include <QPushButton>
+#include <QRect>
 
 #include "modelinfo.h"
 
 class QFrame;
 class QLabel;
 class QLineEdit;
-class QScrollArea;
-class QVBoxLayout;
+class QListView;
+class QModelIndex;
+class ModelListModel;
+class ModelListProxyModel;
 class QStackedWidget;
 
 class ModelSelectBox : public QPushButton {
@@ -43,9 +47,9 @@ private:
     QStackedWidget *stack = nullptr;
     QWidget *loadingPage = nullptr;
     QLabel *loadingLabel = nullptr;
-    QScrollArea *scrollArea = nullptr;
-    QWidget *rowsWidget = nullptr;
-    QVBoxLayout *rowsLayout = nullptr;
+    QListView *modelListView = nullptr;
+    ModelListModel *modelListModel = nullptr;
+    ModelListProxyModel *proxyModel = nullptr;
     QFrame *tooltip = nullptr;
     QLabel *tooltipName = nullptr;
     QLabel *tooltipDescription = nullptr;
@@ -61,13 +65,14 @@ private:
     void showPopup();
     void showLoading();
     void rebuildRows();
-    void addRow(const ModelInfo &model, bool isEmptyItem);
     void chooseModel(const QString &modelId);
     void updateButtonLabel();
-    void showTooltipFor(const ModelInfo &model, QWidget *anchor);
+    void showTooltipFor(const ModelInfo &model, const QRect &globalAnchor);
     void hideTooltip();
-    void clearRows();
-    ModelInfo modelForObject(QObject *object) const;
+    void updateCurrentIndex();
+    void updateCurrentIndexLater();
+    bool isInfoArea(const QModelIndex &viewIndex, const QPoint &pos) const;
+    ModelInfo modelForIndex(const QModelIndex &viewIndex) const;
 };
 
 #endif // MODELSELECTBOX_H
