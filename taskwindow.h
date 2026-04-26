@@ -37,14 +37,15 @@ public:
 
 public slots:
     void startRequest(const QUrl &url,
+                      int requestId,
                       const QByteArray &authorizationHeader,
                       const QByteArray &body,
                       const QString &proxyText);
     void abortRequest();
 
 signals:
-    void readyRead(const QByteArray &chunk);
-    void finished(int error, const QString &errorString, int statusCode);
+    void readyRead(int requestId, const QByteArray &chunk);
+    void finished(int requestId, int error, const QString &errorString, int statusCode);
 
 private:
     QNetworkAccessManager *networkManager;
@@ -108,6 +109,7 @@ private:
     QString transcriptText;
     QString pendingResponseText;
     QList<ChatMessage> messageHistory;
+    int currentRequestId;
     bool sawStreamFormat;
     bool requestInFlight;
     bool responseScrollDragActive;
@@ -135,8 +137,8 @@ private:
     QString applyCharLimit(const QString &text) const;
     void startConversation(const TaskDefinition &task, const QString &originalText);
     void sendRequestWithHistory(const TaskDefinition &task);
-    void handleRequestReadyRead(const QByteArray &chunk);
-    void handleRequestFinished(int error, const QString &errorString, int statusCode);
+    void handleRequestReadyRead(int requestId, const QByteArray &chunk);
+    void handleRequestFinished(int requestId, int error, const QString &errorString, int statusCode);
     void insertResponse(const QString &text);
     void ensureResponseWindow();
     void updateResponseView();
