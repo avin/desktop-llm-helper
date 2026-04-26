@@ -556,6 +556,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , loadingLabel(nullptr)
     , animationTimer(nullptr)
     , dotCount(0)
+    , replyIndicatorTimer(nullptr)
+    , replyDotCount(3)
     , responseWindow(nullptr)
     , responseView(nullptr)
     , followUpInput(nullptr)
@@ -563,6 +565,7 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , requestInFlight(false)
     , responseScrollDragActive(false)
     , pendingResponseViewUpdate(false)
+    , replyIndicatorVisible(false)
     , originalClipboardWasEmpty(true)
     , menuActiveIndex(-1) {
     setAttribute(Qt::WA_DeleteOnClose, true);
@@ -622,12 +625,13 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
         menuButtons.append(btn);
         connect(btn, &QPushButton::clicked, this, [this, i]() {
             activeTaskIndex = i;
+            const TaskDefinition task = tasks.at(i);
             hide();
-            showLoadingIndicator();
+            if (task.insertMode)
+                showLoadingIndicator();
 
             saveOriginalClipboard();
             const QString original = captureSelectedText();
-            const TaskDefinition task = tasks.at(i);
             restoreOriginalClipboard();
             if (original.isEmpty()) {
                 clearOriginalClipboardSnapshot();
@@ -670,6 +674,7 @@ TaskWindow::~TaskWindow() {
     clearOriginalClipboardSnapshot();
     removeMenuHooks();
     hideLoadingIndicator();
+    hideReplyIndicator();
 }
 
 QString TaskWindow::captureSelectedText() {
@@ -753,6 +758,10 @@ void TaskWindow::startConversation(const TaskDefinition &task, const QString &or
     resetConversationState();
     appendMessageToHistory("system", task.prompt);
     appendMessageToHistory("user", applyCharLimit(originalText));
+    if (!task.insertMode) {
+        ensureResponseWindow();
+        showReplyIndicator();
+    }
     sendRequestWithHistory(task);
 }
 
@@ -810,7 +819,7 @@ void TaskWindow::sendFollowUpMessage() {
     followUpInput->clear();
     updateResponseView();
 
-    showLoadingIndicator();
+    showReplyIndicator();
     sendRequestWithHistory(tasks.at(activeTaskIndex));
 }
 
@@ -830,13 +839,16 @@ void TaskWindow::handleRequestReadyRead(const QByteArray &chunk) {
         streamBuffer.remove(0, lineEnd + 1);
         const QString delta = parseStreamDelta(line);
         if (!delta.isEmpty()) {
+            if (!activeRequestTask.insertMode)
+                hideReplyIndicator();
             pendingResponseText += delta;
             appended = true;
         }
     }
 
     if (sawStreamFormat) {
-        hideLoadingIndicator();
+        if (activeRequestTask.insertMode)
+            hideLoadingIndicator();
         if (!activeRequestTask.insertMode)
             ensureResponseWindow();
     }
@@ -847,6 +859,7 @@ void TaskWindow::handleRequestReadyRead(const QByteArray &chunk) {
 
 void TaskWindow::handleRequestFinished(int error, const QString &errorString, int statusCode) {
     hideLoadingIndicator();
+    hideReplyIndicator();
 
     if (!streamBuffer.isEmpty()) {
         const QString delta = parseStreamDelta(streamBuffer);
@@ -1235,6 +1248,11 @@ QString TaskWindow::buildDisplayMarkdown() const {
             displayText += "\n\n";
         displayText += pendingResponseText;
     }
+    if (replyIndicatorVisible) {
+        if (!displayText.isEmpty() && !displayText.endsWith("\n\n"))
+            displayText += "\n\n";
+        displayText += QStringLiteral("Replying") + QString(replyDotCount, '.');
+    }
     return displayText;
 }
 
@@ -1265,6 +1283,7 @@ void TaskWindow::resetRequestState() {
 }
 
 void TaskWindow::resetConversationState() {
+    hideReplyIndicator();
     messageHistory.clear();
     transcriptText.clear();
     pendingResponseText.clear();
@@ -1731,6 +1750,31 @@ void TaskWindow::hideLoadingIndicator() {
     }
 }
 
+void TaskWindow::showReplyIndicator() {
+    replyIndicatorVisible = true;
+    replyDotCount = 3;
+    if (!replyIndicatorTimer) {
+        replyIndicatorTimer = new QTimer(this);
+        connect(replyIndicatorTimer, &QTimer::timeout,
+                this, &TaskWindow::animateReplyIndicator);
+    }
+    if (!replyIndicatorTimer->isActive())
+        replyIndicatorTimer->start(500);
+    updateResponseView();
+}
+
+void TaskWindow::hideReplyIndicator() {
+    if (replyIndicatorTimer) {
+        replyIndicatorTimer->stop();
+        replyIndicatorTimer->deleteLater();
+        replyIndicatorTimer = nullptr;
+    }
+    if (!replyIndicatorVisible)
+        return;
+    replyIndicatorVisible = false;
+    updateResponseView();
+}
+
 void TaskWindow::updateLoadingPosition() {
     if (!loadingWindow)
         return;
@@ -1747,6 +1791,13 @@ void TaskWindow::animateLoadingText() {
         loadingWindow->adjustSize();
         updateLoadingPosition();
     }
+}
+
+void TaskWindow::animateReplyIndicator() {
+    if (!replyIndicatorVisible)
+        return;
+    replyDotCount = (replyDotCount % 3) + 1;
+    updateResponseView();
 }
 
 void TaskWindow::keyPressEvent(QKeyEvent *ev) {

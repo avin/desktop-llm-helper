@@ -81,6 +81,7 @@ protected:
 private slots:
     void updateLoadingPosition();
     void animateLoadingText();
+    void animateReplyIndicator();
     void sendFollowUpMessage();
 
 private:
@@ -95,6 +96,8 @@ private:
     QLabel *loadingLabel;
     QTimer *animationTimer;
     int dotCount;
+    QTimer *replyIndicatorTimer;
+    int replyDotCount;
 
     QPointer<QDialog> responseWindow;
     QPointer<QTextBrowser> responseView;
@@ -109,6 +112,7 @@ private:
     bool requestInFlight;
     bool responseScrollDragActive;
     bool pendingResponseViewUpdate;
+    bool replyIndicatorVisible;
     bool originalClipboardWasEmpty;
     QList<QPushButton *> menuButtons;
     int menuActiveIndex;
@@ -169,6 +173,8 @@ private:
 
     void showLoadingIndicator();
     void hideLoadingIndicator();
+    void showReplyIndicator();
+    void hideReplyIndicator();
 };
 
 #endif // TASKWINDOW_H
