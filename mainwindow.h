@@ -7,11 +7,13 @@
 #include <QList>
 #include <QSystemTrayIcon>
 #include <QCloseEvent>
+#include <QHash>
 #include <QPointer>
 #include <QSize>
 
 #include "hotkeymanager.h"
 #include "configstore.h"
+#include "modelinfo.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -20,7 +22,8 @@ QT_END_NAMESPACE
 class TaskWidget;
 class TaskWindow;
 class ModelSelectBox;
-class QNetworkAccessManager;
+class ModelListLoader;
+class QThread;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -48,10 +51,21 @@ private slots:
     void updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom);
     void commitTaskResponsePrefs();
     void requestModelList(ModelSelectBox *target, int generation);
+    void handleModelListLoaded(int requestId, const ModelInfoList &models);
+    void handleModelListFailed(int requestId, const QString &message);
     void exportSettings();
     void importSettings();
 
+signals:
+    void modelListLoadRequested(int requestId, const QString &baseUrl,
+                                const QString &apiKey, const QString &proxyText);
+
 private:
+    struct PendingModelRequest {
+        QPointer<ModelSelectBox> target;
+        int generation = 0;
+    };
+
     Ui::MainWindow *ui;
     QString prevHotkey;
     bool hotkeyCaptured;
@@ -59,7 +73,10 @@ private:
     bool loadingConfig;
     QSystemTrayIcon *trayIcon;
     QPointer<TaskWindow> menuWindow;
-    QNetworkAccessManager *modelNetworkManager;
+    QThread *modelLoaderThread;
+    ModelListLoader *modelListLoader;
+    int nextModelRequestId;
+    QHash<int, PendingModelRequest> pendingModelRequests;
 
     void createTrayIcon();
     void loadConfig();

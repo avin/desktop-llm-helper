@@ -4,6 +4,7 @@
 #include "taskwindow.h"
 #include "hotkeymanager.h"
 #include "modelselectbox.h"
+#include "modellistloader.h"
 
 #include <QDir>
 #include <QFile>
@@ -27,15 +28,8 @@
 #include <QApplication>
 #include <QVariant>
 #include <QMessageBox>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QNetworkProxy>
-#include <QJsonArray>
-#include <QJsonObject>
 #include <QStandardPaths>
-#include <QUrl>
-#include <QSet>
+#include <QThread>
 
 #include <functional>
 
@@ -46,73 +40,6 @@ QPointer<MainWindow> MainWindow::instance = nullptr;
 namespace {
 constexpr const char kAddTabMarker[] = "add_tab";
 constexpr const char kDefaultModelLabel[] = "Default";
-
-QUrl buildApiUrl(const QString &baseUrl, const QString &pathSuffix) {
-    QUrl url(baseUrl.trimmed());
-    if (!url.isValid())
-        return QUrl();
-    QString path = url.path();
-    if (!path.endsWith('/'))
-        path += '/';
-    QString suffix = pathSuffix;
-    if (suffix.startsWith('/'))
-        suffix.remove(0, 1);
-    url.setPath(path + suffix);
-    return url;
-}
-
-void applyProxyToManager(QNetworkAccessManager *manager, const QString &proxyText) {
-    if (!manager)
-        return;
-    const QString trimmed = proxyText.trimmed();
-    if (trimmed.isEmpty()) {
-        QNetworkProxy proxy;
-        proxy.setType(QNetworkProxy::NoProxy);
-        manager->setProxy(proxy);
-        return;
-    }
-    QUrl proxyUrl(trimmed);
-    if (!proxyUrl.isValid()) {
-        QNetworkProxy proxy;
-        proxy.setType(QNetworkProxy::NoProxy);
-        manager->setProxy(proxy);
-        return;
-    }
-    QNetworkProxy proxy(QNetworkProxy::HttpProxy, proxyUrl.host(), proxyUrl.port());
-    manager->setProxy(proxy);
-}
-
-ModelInfoList parseModelList(const QJsonDocument &doc) {
-    ModelInfoList models;
-    QSet<QString> seenIds;
-    const QJsonArray data = doc.object().value("data").toArray();
-
-    for (const QJsonValue &value : data) {
-        if (!value.isObject())
-            continue;
-
-        const QJsonObject object = value.toObject();
-        const QString id = object.value("id").toString().trimmed();
-        if (id.isEmpty() || id == QLatin1String(kDefaultModelLabel) || seenIds.contains(id))
-            continue;
-
-        ModelInfo model;
-        model.id = id;
-        model.name = object.value("name").toString();
-        model.description = object.value("description").toString();
-        model.knowledgeCutoff = object.value("knowledge_cutoff").toString();
-
-        const QJsonObject pricing = object.value("pricing").toObject();
-        model.promptPrice = pricing.value("prompt").toString();
-        model.completionPrice = pricing.value("completion").toString();
-        model.inputCacheReadPrice = pricing.value("input_cache_read").toString();
-
-        seenIds.insert(id);
-        models.append(model);
-    }
-
-    return models;
-}
 
 class TaskTabBar : public QTabBar {
 public:
@@ -467,8 +394,11 @@ MainWindow::MainWindow(QWidget *parent)
       , loadingConfig(false)
       , trayIcon(nullptr)
       , menuWindow(nullptr)
-      , modelNetworkManager(new QNetworkAccessManager(this)) {
+      , modelLoaderThread(new QThread(this))
+      , modelListLoader(new ModelListLoader)
+      , nextModelRequestId(0) {
     instance = this;
+    qRegisterMetaType<ModelInfoList>("ModelInfoList");
     ui->setupUi(this);
     // Include application name in the window title
     setWindowTitle(QCoreApplication::applicationName() + " - " + tr("Settings"));
@@ -520,12 +450,24 @@ MainWindow::MainWindow(QWidget *parent)
     connect(hotkeyManager, &HotkeyManager::hotkeyPressed,
             this, &MainWindow::handleGlobalHotkey);
 
+    modelListLoader->moveToThread(modelLoaderThread);
+    connect(modelLoaderThread, &QThread::finished, modelListLoader, &QObject::deleteLater);
+    connect(this, &MainWindow::modelListLoadRequested,
+            modelListLoader, &ModelListLoader::loadModels);
+    connect(modelListLoader, &ModelListLoader::modelsLoaded,
+            this, &MainWindow::handleModelListLoaded);
+    connect(modelListLoader, &ModelListLoader::loadFailed,
+            this, &MainWindow::handleModelListFailed);
+    modelLoaderThread->start();
+
     loadConfig();
     hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
 MainWindow::~MainWindow() {
     GlobalKeyInterceptor::stop();
+    modelLoaderThread->quit();
+    modelLoaderThread->wait();
     delete ui;
     instance = nullptr;
 }
@@ -838,42 +780,28 @@ void MainWindow::requestModelList(ModelSelectBox *target, int generation) {
     if (!targetSelector)
         return;
 
-    const QUrl url = buildApiUrl(ui->lineEditApiEndpoint->text(), "models");
-    if (!url.isValid() || url.isEmpty()) {
-        targetSelector->setLoadError(tr("Invalid API base URL."));
+    const int requestId = ++nextModelRequestId;
+    pendingModelRequests.insert(requestId, PendingModelRequest{targetSelector, generation});
+    emit modelListLoadRequested(requestId,
+                                ui->lineEditApiEndpoint->text(),
+                                ui->lineEditApiKey->text(),
+                                ui->lineEditProxy->text());
+}
+
+void MainWindow::handleModelListLoaded(int requestId, const ModelInfoList &models) {
+    const PendingModelRequest request = pendingModelRequests.take(requestId);
+    if (!request.target || request.target->currentReloadGeneration() != request.generation)
         return;
-    }
 
-    applyProxyToManager(modelNetworkManager, ui->lineEditProxy->text());
+    request.target->setModels(models);
+}
 
-    QNetworkRequest request(url);
-    const QString apiKey = ui->lineEditApiKey->text().trimmed();
-    if (!apiKey.isEmpty())
-        request.setRawHeader("Authorization", "Bearer " + apiKey.toUtf8());
+void MainWindow::handleModelListFailed(int requestId, const QString &message) {
+    const PendingModelRequest request = pendingModelRequests.take(requestId);
+    if (!request.target || request.target->currentReloadGeneration() != request.generation)
+        return;
 
-    QNetworkReply *reply = modelNetworkManager->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, targetSelector, generation]() {
-        const QByteArray payload = reply->readAll();
-        const bool targetIsCurrent = targetSelector && targetSelector->currentReloadGeneration() == generation;
-        if (reply->error() != QNetworkReply::NoError) {
-            if (targetIsCurrent)
-                targetSelector->setLoadError(tr("Failed to load models: %1").arg(reply->errorString()));
-            reply->deleteLater();
-            return;
-        }
-
-        const QJsonDocument doc = QJsonDocument::fromJson(payload);
-        if (!doc.isObject()) {
-            if (targetIsCurrent)
-                targetSelector->setLoadError(tr("Invalid response format."));
-            reply->deleteLater();
-            return;
-        }
-
-        if (targetIsCurrent)
-            targetSelector->setModels(parseModelList(doc));
-        reply->deleteLater();
-    });
+    request.target->setLoadError(message);
 }
 
 void MainWindow::handleGlobalHotkey() {

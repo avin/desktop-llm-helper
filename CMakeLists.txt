@@ -24,6 +24,8 @@ set(PROJECT_SOURCES
         modelselectbox.cpp
         modelselectbox.h
         modelinfo.h
+        modellistloader.cpp
+        modellistloader.h
         configstore.cpp
         configstore.h
         taskwidget.cpp

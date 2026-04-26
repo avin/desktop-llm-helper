@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QVector>
+#include <QMetaType>
 
 struct ModelInfo {
     QString id;
@@ -15,5 +16,7 @@ struct ModelInfo {
 };
 
 using ModelInfoList = QVector<ModelInfo>;
+
+Q_DECLARE_METATYPE(ModelInfoList)
 
 #endif // MODELINFO_H

@@ -229,8 +229,11 @@ void ModelSelectBox::showPopup() {
     popup->raise();
     searchEdit->setFocus(Qt::PopupFocusReason);
 
-    ++reloadGeneration;
-    emit modelsReloadRequested(this, reloadGeneration);
+    const int generation = ++reloadGeneration;
+    QTimer::singleShot(50, this, [this, generation]() {
+        if (popup && popup->isVisible() && reloadGeneration == generation)
+            emit modelsReloadRequested(this, generation);
+    });
 }
 
 void ModelSelectBox::showLoading() {
