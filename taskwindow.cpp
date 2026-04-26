@@ -18,6 +18,8 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMetaObject>
+#include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QNetworkReply>
@@ -38,17 +40,117 @@
 #include <QTextCursor>
 #include <QTextFragment>
 #include <QTextLayout>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QVBoxLayout>
 #include <QPlainTextEdit>
 
 #include <functional>
+#include <cstring>
+#include <memory>
 
 #include <windows.h>
 
 namespace {
 constexpr const char kDefaultModelLabel[] = "Default";
+constexpr const char kClipboardHistoryExcludeMime[] =
+    "application/x-qt-windows-mime;value=\"ExcludeClipboardContentFromMonitorProcessing\"";
+constexpr const wchar_t kClipboardHistoryExcludeFormat[] =
+    L"ExcludeClipboardContentFromMonitorProcessing";
+
+bool hasClipboardData(const QMimeData *mimeData) {
+    if (!mimeData)
+        return false;
+    return !mimeData->formats().isEmpty()
+        || mimeData->hasText()
+        || mimeData->hasHtml()
+        || mimeData->hasUrls()
+        || mimeData->hasImage()
+        || mimeData->hasColor();
+}
+
+void addClipboardHistoryExclusion(QMimeData *mimeData) {
+    if (!mimeData)
+        return;
+    mimeData->setData(QLatin1String(kClipboardHistoryExcludeMime), QByteArray(1, '\0'));
+}
+
+std::unique_ptr<QMimeData> cloneMimeData(const QMimeData *source) {
+    auto clone = std::make_unique<QMimeData>();
+    if (!source)
+        return clone;
+
+    for (const QString &format : source->formats())
+        clone->setData(format, source->data(format));
+    if (source->hasText())
+        clone->setText(source->text());
+    if (source->hasHtml())
+        clone->setHtml(source->html());
+    if (source->hasUrls())
+        clone->setUrls(source->urls());
+    if (source->hasImage())
+        clone->setImageData(source->imageData());
+    if (source->hasColor())
+        clone->setColorData(source->colorData());
+    return clone;
+}
+
+bool setWindowsClipboardText(const QString &text, bool excludeFromHistory) {
+    if (!OpenClipboard(nullptr))
+        return false;
+
+    bool success = false;
+    HGLOBAL textHandle = nullptr;
+    HGLOBAL excludeHandle = nullptr;
+
+    do {
+        if (!EmptyClipboard())
+            break;
+
+        const qsizetype charCount = text.size() + 1;
+        const SIZE_T byteCount = static_cast<SIZE_T>(charCount) * sizeof(wchar_t);
+        textHandle = GlobalAlloc(GMEM_MOVEABLE, byteCount);
+        if (!textHandle)
+            break;
+
+        void *textMemory = GlobalLock(textHandle);
+        if (!textMemory)
+            break;
+        memcpy(textMemory, text.utf16(), byteCount);
+        GlobalUnlock(textHandle);
+
+        if (!SetClipboardData(CF_UNICODETEXT, textHandle))
+            break;
+        textHandle = nullptr;
+
+        if (excludeFromHistory) {
+            const UINT excludeFormat = RegisterClipboardFormatW(kClipboardHistoryExcludeFormat);
+            if (excludeFormat != 0) {
+                excludeHandle = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+                if (excludeHandle) {
+                    void *excludeMemory = GlobalLock(excludeHandle);
+                    if (excludeMemory) {
+                        *static_cast<DWORD *>(excludeMemory) = 0;
+                        GlobalUnlock(excludeHandle);
+                        if (SetClipboardData(excludeFormat, excludeHandle))
+                            excludeHandle = nullptr;
+                    }
+                }
+            }
+        }
+
+        success = true;
+    } while (false);
+
+    if (textHandle)
+        GlobalFree(textHandle);
+    if (excludeHandle)
+        GlobalFree(excludeHandle);
+    CloseClipboard();
+    return success;
+}
 
 QUrl buildApiUrl(const QString &baseUrl, const QString &pathSuffix) {
     QUrl url(baseUrl.trimmed());
@@ -351,8 +453,92 @@ const QString &markdownCss() {
 }
 
 TaskWindow *TaskWindow::s_activeMenu = nullptr;
+TaskWindow *TaskWindow::s_activeOperation = nullptr;
 HHOOK TaskWindow::s_keyboardHook = nullptr;
 HHOOK TaskWindow::s_mouseHook = nullptr;
+HHOOK TaskWindow::s_operationKeyboardHook = nullptr;
+
+TaskRequestWorker::TaskRequestWorker(QObject *parent)
+    : QObject(parent)
+    , networkManager(nullptr) {
+}
+
+void TaskRequestWorker::startRequest(const QUrl &url,
+                                     const QByteArray &authorizationHeader,
+                                     const QByteArray &body,
+                                     const QString &proxyText) {
+    if (reply)
+        reply->abort();
+
+    if (!networkManager)
+        networkManager = new QNetworkAccessManager(this);
+    applyProxy(proxyText);
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Authorization", authorizationHeader);
+
+    QNetworkReply *newReply = networkManager->post(request, body);
+    reply = newReply;
+    connect(newReply, &QNetworkReply::readyRead, this, [this, requestReply = QPointer<QNetworkReply>(newReply)]() {
+        if (!requestReply || reply != requestReply)
+            return;
+        const QByteArray chunk = requestReply->readAll();
+        if (!chunk.isEmpty())
+            emit readyRead(chunk);
+    });
+    connect(newReply, &QNetworkReply::finished, this, [this, requestReply = QPointer<QNetworkReply>(newReply)]() {
+        if (!requestReply)
+            return;
+        if (reply != requestReply) {
+            requestReply->deleteLater();
+            return;
+        }
+
+        const QByteArray chunk = requestReply->readAll();
+        if (!chunk.isEmpty())
+            emit readyRead(chunk);
+
+        const int error = static_cast<int>(requestReply->error());
+        const QString errorString = requestReply->errorString();
+        const int statusCode = requestReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        requestReply->deleteLater();
+        reply.clear();
+        emit finished(error, errorString, statusCode);
+    });
+}
+
+void TaskRequestWorker::abortRequest() {
+    if (reply)
+        reply->abort();
+}
+
+void TaskRequestWorker::applyProxy(const QString &proxyText) {
+    if (!networkManager)
+        return;
+
+    const QString trimmed = proxyText.trimmed();
+    if (trimmed.isEmpty()) {
+        QNetworkProxy proxy;
+        proxy.setType(QNetworkProxy::NoProxy);
+        networkManager->setProxy(proxy);
+        return;
+    }
+
+    const QUrl proxyUrl(trimmed);
+    if (!proxyUrl.isValid()) {
+        QNetworkProxy proxy;
+        proxy.setType(QNetworkProxy::NoProxy);
+        networkManager->setProxy(proxy);
+        return;
+    }
+
+    QNetworkProxy proxy;
+    proxy.setType(QNetworkProxy::HttpProxy);
+    proxy.setHostName(proxyUrl.host());
+    proxy.setPort(proxyUrl.port());
+    networkManager->setProxy(proxy);
+}
 
 TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
                        const AppSettings &settings,
@@ -363,12 +549,15 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , tasks(taskList)
     , activeTaskIndex(-1)
     , settings(settings)
-    , networkManager(new QNetworkAccessManager(this))
+    , requestThread(new QThread(this))
+    , requestWorker(new TaskRequestWorker)
     , loadingWindow(nullptr)
     , loadingTimer(nullptr)
     , loadingLabel(nullptr)
     , animationTimer(nullptr)
     , dotCount(0)
+    , replyIndicatorTimer(nullptr)
+    , replyDotCount(3)
     , responseWindow(nullptr)
     , responseView(nullptr)
     , followUpInput(nullptr)
@@ -376,22 +565,21 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , requestInFlight(false)
     , responseScrollDragActive(false)
     , pendingResponseViewUpdate(false)
+    , replyIndicatorVisible(false)
+    , originalClipboardWasEmpty(true)
     , menuActiveIndex(-1) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_ShowWithoutActivating, true);
     setFocusPolicy(Qt::NoFocus);
 
-    if (!this->settings.proxy.isEmpty()) {
-        QUrl proxyUrl(this->settings.proxy);
-        if (proxyUrl.isValid()) {
-            QNetworkProxy proxy;
-            proxy.setType(QNetworkProxy::HttpProxy);
-            proxy.setHostName(proxyUrl.host());
-            proxy.setPort(proxyUrl.port());
-            networkManager->setProxy(proxy);
-        }
-    }
+    requestWorker->moveToThread(requestThread);
+    connect(requestThread, &QThread::finished, requestWorker, &QObject::deleteLater);
+    connect(requestWorker, &TaskRequestWorker::readyRead,
+            this, &TaskWindow::handleRequestReadyRead);
+    connect(requestWorker, &TaskRequestWorker::finished,
+            this, &TaskWindow::handleRequestFinished);
+    requestThread->start();
 
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(10, 10, 10, 10);
@@ -437,18 +625,22 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
         menuButtons.append(btn);
         connect(btn, &QPushButton::clicked, this, [this, i]() {
             activeTaskIndex = i;
+            const TaskDefinition task = tasks.at(i);
             hide();
-            showLoadingIndicator();
+            if (task.insertMode)
+                showLoadingIndicator();
 
+            saveOriginalClipboard();
             const QString original = captureSelectedText();
+            restoreOriginalClipboard();
             if (original.isEmpty()) {
+                clearOriginalClipboardSnapshot();
                 hideLoadingIndicator();
                 return;
             }
 
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            const TaskDefinition task = tasks.at(i);
-            clipboard->setText(task.prompt + original);
+            if (!task.insertMode)
+                clearOriginalClipboardSnapshot();
 
             startConversation(task, original);
         });
@@ -468,13 +660,29 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
 }
 
 TaskWindow::~TaskWindow() {
+    removeOperationCancelHook();
+    if (requestWorker) {
+        QMetaObject::invokeMethod(requestWorker,
+                                  "abortRequest",
+                                  Qt::BlockingQueuedConnection);
+    }
+    if (requestThread) {
+        requestThread->quit();
+        requestThread->wait();
+    }
+    restoreOriginalClipboard();
+    clearOriginalClipboardSnapshot();
     removeMenuHooks();
     hideLoadingIndicator();
+    hideReplyIndicator();
 }
 
 QString TaskWindow::captureSelectedText() {
     QClipboard *clipboard = QGuiApplication::clipboard();
-    clipboard->clear(QClipboard::Clipboard);
+    const QString marker = QStringLiteral("DesktopLLMHelper-clipboard-marker-%1")
+                               .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    setClipboardText(marker, true);
+
     INPUT copyInputs[4] = {};
     copyInputs[0].type = INPUT_KEYBOARD;
     copyInputs[0].ki.wVk = VK_CONTROL;
@@ -490,13 +698,54 @@ QString TaskWindow::captureSelectedText() {
 
     QElapsedTimer timer;
     timer.start();
-    while (timer.elapsed() < 200) {
+    while (timer.elapsed() < 500) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         const QString text = clipboard->text();
-        if (!text.isEmpty())
+        if (!text.isEmpty() && text != marker)
             return text;
     }
     return QString();
+}
+
+void TaskWindow::saveOriginalClipboard() {
+    const QClipboard *clipboard = QGuiApplication::clipboard();
+    const QMimeData *currentData = clipboard ? clipboard->mimeData(QClipboard::Clipboard) : nullptr;
+    originalClipboardWasEmpty = !hasClipboardData(currentData);
+    originalClipboardData = cloneMimeData(currentData);
+}
+
+void TaskWindow::restoreOriginalClipboard() {
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard || !originalClipboardData)
+        return;
+
+    if (originalClipboardWasEmpty) {
+        clipboard->clear(QClipboard::Clipboard);
+        return;
+    }
+
+    std::unique_ptr<QMimeData> restored = cloneMimeData(originalClipboardData.get());
+    addClipboardHistoryExclusion(restored.get());
+    clipboard->setMimeData(restored.release(), QClipboard::Clipboard);
+}
+
+void TaskWindow::clearOriginalClipboardSnapshot() {
+    originalClipboardData.reset();
+    originalClipboardWasEmpty = true;
+}
+
+void TaskWindow::setClipboardText(const QString &text, bool excludeFromHistory) {
+    if (setWindowsClipboardText(text, excludeFromHistory))
+        return;
+
+    auto mimeData = std::make_unique<QMimeData>();
+    mimeData->setText(text);
+    if (excludeFromHistory)
+        addClipboardHistoryExclusion(mimeData.get());
+
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (clipboard)
+        clipboard->setMimeData(mimeData.release(), QClipboard::Clipboard);
 }
 
 QString TaskWindow::applyCharLimit(const QString &text) const {
@@ -509,17 +758,19 @@ void TaskWindow::startConversation(const TaskDefinition &task, const QString &or
     resetConversationState();
     appendMessageToHistory("system", task.prompt);
     appendMessageToHistory("user", applyCharLimit(originalText));
+    if (!task.insertMode) {
+        ensureResponseWindow();
+        showReplyIndicator();
+    }
     sendRequestWithHistory(task);
 }
 
 void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
     resetRequestState();
+    activeRequestTask = task;
     setRequestInFlight(true);
 
     const QUrl requestUrl = buildApiUrl(settings.apiEndpoint, "chat/completions");
-    QNetworkRequest request(requestUrl);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", "Bearer " + settings.apiKey.toUtf8());
 
     QJsonArray messagesArray;
     for (const ChatMessage &msg : messageHistory) {
@@ -542,14 +793,13 @@ void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
         body["stream"] = true;
     QJsonDocument bodyDoc(body);
 
-    QNetworkReply *reply = networkManager->post(request, bodyDoc.toJson());
-    currentReply = reply;
-    connect(reply, &QNetworkReply::readyRead, this, [this, task, reply]() {
-        handleReplyReadyRead(task, reply);
-    });
-    connect(reply, &QNetworkReply::finished, this, [this, task, reply]() {
-        handleReplyFinished(task, reply);
-    });
+    QMetaObject::invokeMethod(requestWorker,
+                              "startRequest",
+                              Qt::QueuedConnection,
+                              Q_ARG(QUrl, requestUrl),
+                              Q_ARG(QByteArray, "Bearer " + settings.apiKey.toUtf8()),
+                              Q_ARG(QByteArray, bodyDoc.toJson()),
+                              Q_ARG(QString, settings.proxy));
 }
 
 void TaskWindow::sendFollowUpMessage() {
@@ -569,12 +819,11 @@ void TaskWindow::sendFollowUpMessage() {
     followUpInput->clear();
     updateResponseView();
 
-    showLoadingIndicator();
+    showReplyIndicator();
     sendRequestWithHistory(tasks.at(activeTaskIndex));
 }
 
-void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply *reply) {
-    const QByteArray chunk = reply->readAll();
+void TaskWindow::handleRequestReadyRead(const QByteArray &chunk) {
     if (chunk.isEmpty())
         return;
 
@@ -590,25 +839,27 @@ void TaskWindow::handleReplyReadyRead(const TaskDefinition &task, QNetworkReply 
         streamBuffer.remove(0, lineEnd + 1);
         const QString delta = parseStreamDelta(line);
         if (!delta.isEmpty()) {
+            if (!activeRequestTask.insertMode)
+                hideReplyIndicator();
             pendingResponseText += delta;
             appended = true;
         }
     }
 
     if (sawStreamFormat) {
-        hideLoadingIndicator();
-        if (!task.insertMode)
+        if (activeRequestTask.insertMode)
+            hideLoadingIndicator();
+        if (!activeRequestTask.insertMode)
             ensureResponseWindow();
     }
 
-    if (appended && !task.insertMode)
+    if (appended && !activeRequestTask.insertMode)
         updateResponseView();
 }
 
-void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *reply) {
-    if (reply == currentReply)
-        currentReply = nullptr;
+void TaskWindow::handleRequestFinished(int error, const QString &errorString, int statusCode) {
     hideLoadingIndicator();
+    hideReplyIndicator();
 
     if (!streamBuffer.isEmpty()) {
         const QString delta = parseStreamDelta(streamBuffer);
@@ -617,9 +868,9 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
         streamBuffer.clear();
     }
 
-    if (reply->error() != QNetworkReply::NoError) {
-        if (reply->error() == QNetworkReply::OperationCanceledError) {
-            if (task.insertMode) {
+    if (error != QNetworkReply::NoError) {
+        if (error == QNetworkReply::OperationCanceledError) {
+            if (activeRequestTask.insertMode) {
                 pendingResponseText.clear();
             } else {
                 if (!pendingResponseText.isEmpty()) {
@@ -628,19 +879,17 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
                 }
                 updateResponseView();
             }
-            reply->deleteLater();
             setRequestInFlight(false);
+            clearOriginalClipboardSnapshot();
             return;
         }
-        const QString errStr = reply->errorString();
-        const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         QMessageBox::critical(this,
                               tr("Error"),
                               tr("LLM request failed (%1): HTTP status %2")
-                                  .arg(errStr)
+                                  .arg(errorString)
                                   .arg(statusCode));
-        reply->deleteLater();
         setRequestInFlight(false);
+        clearOriginalClipboardSnapshot();
         return;
     }
 
@@ -648,14 +897,15 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
         pendingResponseText = extractResponseTextFromJson(responseBody);
     }
 
-    reply->deleteLater();
-
     if (!pendingResponseText.isEmpty())
         appendMessageToHistory("assistant", pendingResponseText);
 
-    if (task.insertMode) {
-        if (!pendingResponseText.isEmpty())
+    if (activeRequestTask.insertMode) {
+        if (!pendingResponseText.isEmpty()) {
             insertResponse(pendingResponseText);
+        } else {
+            clearOriginalClipboardSnapshot();
+        }
         pendingResponseText.clear();
         setRequestInFlight(false);
         return;
@@ -673,8 +923,7 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
 }
 
 void TaskWindow::insertResponse(const QString &text) {
-    QClipboard *clipboard = QGuiApplication::clipboard();
-    clipboard->setText(text);
+    setClipboardText(text, true);
 
     INPUT pasteInputs[4] = {};
     pasteInputs[0].type = INPUT_KEYBOARD;
@@ -688,6 +937,11 @@ void TaskWindow::insertResponse(const QString &text) {
     pasteInputs[3].ki.wVk = VK_CONTROL;
     pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, pasteInputs, sizeof(INPUT));
+
+    QTimer::singleShot(250, this, [this]() {
+        restoreOriginalClipboard();
+        clearOriginalClipboardSnapshot();
+    });
 }
 
 void TaskWindow::ensureResponseWindow() {
@@ -994,6 +1248,11 @@ QString TaskWindow::buildDisplayMarkdown() const {
             displayText += "\n\n";
         displayText += pendingResponseText;
     }
+    if (replyIndicatorVisible) {
+        if (!displayText.isEmpty() && !displayText.endsWith("\n\n"))
+            displayText += "\n\n";
+        displayText += QStringLiteral("Replying") + QString(replyDotCount, '.');
+    }
     return displayText;
 }
 
@@ -1016,15 +1275,15 @@ void TaskWindow::resetRequestState() {
     streamBuffer.clear();
     pendingResponseText.clear();
     sawStreamFormat = false;
-    if (currentReply) {
-        disconnect(currentReply, nullptr, this, nullptr);
-        currentReply->abort();
-        currentReply->deleteLater();
-        currentReply.clear();
+    if (requestInFlight && requestWorker) {
+        QMetaObject::invokeMethod(requestWorker,
+                                  "abortRequest",
+                                  Qt::QueuedConnection);
     }
 }
 
 void TaskWindow::resetConversationState() {
+    hideReplyIndicator();
     messageHistory.clear();
     transcriptText.clear();
     pendingResponseText.clear();
@@ -1039,6 +1298,17 @@ void TaskWindow::resetConversationState() {
 }
 
 void TaskWindow::setRequestInFlight(bool inFlight) {
+    if (requestInFlight == inFlight) {
+        if (inFlight)
+            installOperationCancelHook();
+        else
+            removeOperationCancelHook();
+    } else if (inFlight) {
+        installOperationCancelHook();
+    } else {
+        removeOperationCancelHook();
+    }
+
     requestInFlight = inFlight;
     if (followUpInput)
         followUpInput->setEnabled(!inFlight);
@@ -1073,8 +1343,10 @@ void TaskWindow::updateActionButtonState() {
 void TaskWindow::cancelRequest() {
     if (!requestInFlight)
         return;
-    if (currentReply) {
-        currentReply->abort();
+    if (requestWorker) {
+        QMetaObject::invokeMethod(requestWorker,
+                                  "abortRequest",
+                                  Qt::QueuedConnection);
     }
 }
 
@@ -1255,6 +1527,26 @@ void TaskWindow::removeMenuHooks() {
     }
 }
 
+void TaskWindow::installOperationCancelHook() {
+    s_activeOperation = this;
+    if (!s_operationKeyboardHook) {
+        s_operationKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL,
+                                                    LowLevelOperationKeyboardProc,
+                                                    GetModuleHandleW(nullptr),
+                                                    0);
+    }
+}
+
+void TaskWindow::removeOperationCancelHook() {
+    if (s_activeOperation != this)
+        return;
+    s_activeOperation = nullptr;
+    if (s_operationKeyboardHook) {
+        UnhookWindowsHookEx(s_operationKeyboardHook);
+        s_operationKeyboardHook = nullptr;
+    }
+}
+
 LRESULT CALLBACK TaskWindow::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && s_activeMenu) {
         const auto *data = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
@@ -1279,6 +1571,19 @@ LRESULT CALLBACK TaskWindow::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM 
             }
             default:
                 break;
+        }
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+LRESULT CALLBACK TaskWindow::LowLevelOperationKeyboardProc(int nCode,
+                                                           WPARAM wParam,
+                                                           LPARAM lParam) {
+    if (nCode == HC_ACTION && s_activeOperation) {
+        const auto *data = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
+        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+            if (s_activeOperation->handleOperationHookKey(static_cast<UINT>(data->vkCode)))
+                return 1;
         }
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
@@ -1313,6 +1618,13 @@ bool TaskWindow::handleHookKey(UINT vk) {
         default:
             return false;
     }
+}
+
+bool TaskWindow::handleOperationHookKey(UINT vk) {
+    if (vk != VK_ESCAPE || !requestInFlight)
+        return false;
+    cancelRequest();
+    return true;
 }
 
 void TaskWindow::handleHookMouseClick(const POINT &pt) {
@@ -1438,6 +1750,31 @@ void TaskWindow::hideLoadingIndicator() {
     }
 }
 
+void TaskWindow::showReplyIndicator() {
+    replyIndicatorVisible = true;
+    replyDotCount = 3;
+    if (!replyIndicatorTimer) {
+        replyIndicatorTimer = new QTimer(this);
+        connect(replyIndicatorTimer, &QTimer::timeout,
+                this, &TaskWindow::animateReplyIndicator);
+    }
+    if (!replyIndicatorTimer->isActive())
+        replyIndicatorTimer->start(500);
+    updateResponseView();
+}
+
+void TaskWindow::hideReplyIndicator() {
+    if (replyIndicatorTimer) {
+        replyIndicatorTimer->stop();
+        replyIndicatorTimer->deleteLater();
+        replyIndicatorTimer = nullptr;
+    }
+    if (!replyIndicatorVisible)
+        return;
+    replyIndicatorVisible = false;
+    updateResponseView();
+}
+
 void TaskWindow::updateLoadingPosition() {
     if (!loadingWindow)
         return;
@@ -1454,6 +1791,13 @@ void TaskWindow::animateLoadingText() {
         loadingWindow->adjustSize();
         updateLoadingPosition();
     }
+}
+
+void TaskWindow::animateReplyIndicator() {
+    if (!replyIndicatorVisible)
+        return;
+    replyDotCount = (replyDotCount % 3) + 1;
+    updateResponseView();
 }
 
 void TaskWindow::keyPressEvent(QKeyEvent *ev) {
