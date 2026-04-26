@@ -88,10 +88,13 @@ private:
     std::unique_ptr<QMimeData> originalClipboardData;
 
     static TaskWindow *s_activeMenu;
+    static TaskWindow *s_activeOperation;
     static HHOOK s_keyboardHook;
     static HHOOK s_mouseHook;
+    static HHOOK s_operationKeyboardHook;
     static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK LowLevelOperationKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 
     QString captureSelectedText();
     void saveOriginalClipboard();
@@ -125,7 +128,10 @@ private:
     void handleResponseZoomDelta(int steps);
     void installMenuHooks();
     void removeMenuHooks();
+    void installOperationCancelHook();
+    void removeOperationCancelHook();
     bool handleHookKey(UINT vk);
+    bool handleOperationHookKey(UINT vk);
     void handleHookMouseClick(const POINT &pt);
     bool isPointInsideMenu(const POINT &pt) const;
     void setMenuActiveIndex(int index);

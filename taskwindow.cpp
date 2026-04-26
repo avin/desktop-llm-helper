@@ -451,8 +451,10 @@ const QString &markdownCss() {
 }
 
 TaskWindow *TaskWindow::s_activeMenu = nullptr;
+TaskWindow *TaskWindow::s_activeOperation = nullptr;
 HHOOK TaskWindow::s_keyboardHook = nullptr;
 HHOOK TaskWindow::s_mouseHook = nullptr;
+HHOOK TaskWindow::s_operationKeyboardHook = nullptr;
 
 TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
                        const AppSettings &settings,
@@ -572,6 +574,7 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
 }
 
 TaskWindow::~TaskWindow() {
+    removeOperationCancelHook();
     restoreOriginalClipboard();
     clearOriginalClipboardSnapshot();
     removeMenuHooks();
@@ -1198,6 +1201,17 @@ void TaskWindow::resetConversationState() {
 }
 
 void TaskWindow::setRequestInFlight(bool inFlight) {
+    if (requestInFlight == inFlight) {
+        if (inFlight)
+            installOperationCancelHook();
+        else
+            removeOperationCancelHook();
+    } else if (inFlight) {
+        installOperationCancelHook();
+    } else {
+        removeOperationCancelHook();
+    }
+
     requestInFlight = inFlight;
     if (followUpInput)
         followUpInput->setEnabled(!inFlight);
@@ -1234,7 +1248,9 @@ void TaskWindow::cancelRequest() {
         return;
     if (currentReply) {
         currentReply->abort();
+        return;
     }
+    setRequestInFlight(false);
 }
 
 QString TaskWindow::parseStreamDelta(const QByteArray &line) {
@@ -1414,6 +1430,26 @@ void TaskWindow::removeMenuHooks() {
     }
 }
 
+void TaskWindow::installOperationCancelHook() {
+    s_activeOperation = this;
+    if (!s_operationKeyboardHook) {
+        s_operationKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL,
+                                                    LowLevelOperationKeyboardProc,
+                                                    GetModuleHandleW(nullptr),
+                                                    0);
+    }
+}
+
+void TaskWindow::removeOperationCancelHook() {
+    if (s_activeOperation != this)
+        return;
+    s_activeOperation = nullptr;
+    if (s_operationKeyboardHook) {
+        UnhookWindowsHookEx(s_operationKeyboardHook);
+        s_operationKeyboardHook = nullptr;
+    }
+}
+
 LRESULT CALLBACK TaskWindow::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && s_activeMenu) {
         const auto *data = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
@@ -1438,6 +1474,19 @@ LRESULT CALLBACK TaskWindow::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM 
             }
             default:
                 break;
+        }
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+LRESULT CALLBACK TaskWindow::LowLevelOperationKeyboardProc(int nCode,
+                                                           WPARAM wParam,
+                                                           LPARAM lParam) {
+    if (nCode == HC_ACTION && s_activeOperation) {
+        const auto *data = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
+        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+            if (s_activeOperation->handleOperationHookKey(static_cast<UINT>(data->vkCode)))
+                return 1;
         }
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
@@ -1472,6 +1521,13 @@ bool TaskWindow::handleHookKey(UINT vk) {
         default:
             return false;
     }
+}
+
+bool TaskWindow::handleOperationHookKey(UINT vk) {
+    if (vk != VK_ESCAPE || !requestInFlight)
+        return false;
+    cancelRequest();
+    return true;
 }
 
 void TaskWindow::handleHookMouseClick(const POINT &pt) {
