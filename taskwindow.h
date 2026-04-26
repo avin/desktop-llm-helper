@@ -10,6 +10,8 @@
 #include <QPointer>
 #include <QSize>
 
+#include <memory>
+
 #include <windows.h>
 
 #include "configstore.h"
@@ -23,6 +25,7 @@ class QNetworkReply;
 class QTextBrowser;
 class QDialog;
 class QPlainTextEdit;
+class QMimeData;
 
 struct ChatMessage {
     QString role;
@@ -79,8 +82,10 @@ private:
     bool requestInFlight;
     bool responseScrollDragActive;
     bool pendingResponseViewUpdate;
+    bool originalClipboardWasEmpty;
     QList<QPushButton *> menuButtons;
     int menuActiveIndex;
+    std::unique_ptr<QMimeData> originalClipboardData;
 
     static TaskWindow *s_activeMenu;
     static HHOOK s_keyboardHook;
@@ -89,6 +94,10 @@ private:
     static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam);
 
     QString captureSelectedText();
+    void saveOriginalClipboard();
+    void restoreOriginalClipboard();
+    void clearOriginalClipboardSnapshot();
+    void setClipboardText(const QString &text, bool excludeFromHistory);
     QString applyCharLimit(const QString &text) const;
     void startConversation(const TaskDefinition &task, const QString &originalText);
     void sendRequestWithHistory(const TaskDefinition &task);

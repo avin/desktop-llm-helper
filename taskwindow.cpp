@@ -18,6 +18,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QNetworkReply>
@@ -40,15 +41,114 @@
 #include <QTextLayout>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QVBoxLayout>
 #include <QPlainTextEdit>
 
 #include <functional>
+#include <cstring>
+#include <memory>
 
 #include <windows.h>
 
 namespace {
 constexpr const char kDefaultModelLabel[] = "Default";
+constexpr const char kClipboardHistoryExcludeMime[] =
+    "application/x-qt-windows-mime;value=\"ExcludeClipboardContentFromMonitorProcessing\"";
+constexpr const wchar_t kClipboardHistoryExcludeFormat[] =
+    L"ExcludeClipboardContentFromMonitorProcessing";
+
+bool hasClipboardData(const QMimeData *mimeData) {
+    if (!mimeData)
+        return false;
+    return !mimeData->formats().isEmpty()
+        || mimeData->hasText()
+        || mimeData->hasHtml()
+        || mimeData->hasUrls()
+        || mimeData->hasImage()
+        || mimeData->hasColor();
+}
+
+void addClipboardHistoryExclusion(QMimeData *mimeData) {
+    if (!mimeData)
+        return;
+    mimeData->setData(QLatin1String(kClipboardHistoryExcludeMime), QByteArray(1, '\0'));
+}
+
+std::unique_ptr<QMimeData> cloneMimeData(const QMimeData *source) {
+    auto clone = std::make_unique<QMimeData>();
+    if (!source)
+        return clone;
+
+    for (const QString &format : source->formats())
+        clone->setData(format, source->data(format));
+    if (source->hasText())
+        clone->setText(source->text());
+    if (source->hasHtml())
+        clone->setHtml(source->html());
+    if (source->hasUrls())
+        clone->setUrls(source->urls());
+    if (source->hasImage())
+        clone->setImageData(source->imageData());
+    if (source->hasColor())
+        clone->setColorData(source->colorData());
+    return clone;
+}
+
+bool setWindowsClipboardText(const QString &text, bool excludeFromHistory) {
+    if (!OpenClipboard(nullptr))
+        return false;
+
+    bool success = false;
+    HGLOBAL textHandle = nullptr;
+    HGLOBAL excludeHandle = nullptr;
+
+    do {
+        if (!EmptyClipboard())
+            break;
+
+        const qsizetype charCount = text.size() + 1;
+        const SIZE_T byteCount = static_cast<SIZE_T>(charCount) * sizeof(wchar_t);
+        textHandle = GlobalAlloc(GMEM_MOVEABLE, byteCount);
+        if (!textHandle)
+            break;
+
+        void *textMemory = GlobalLock(textHandle);
+        if (!textMemory)
+            break;
+        memcpy(textMemory, text.utf16(), byteCount);
+        GlobalUnlock(textHandle);
+
+        if (!SetClipboardData(CF_UNICODETEXT, textHandle))
+            break;
+        textHandle = nullptr;
+
+        if (excludeFromHistory) {
+            const UINT excludeFormat = RegisterClipboardFormatW(kClipboardHistoryExcludeFormat);
+            if (excludeFormat != 0) {
+                excludeHandle = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+                if (excludeHandle) {
+                    void *excludeMemory = GlobalLock(excludeHandle);
+                    if (excludeMemory) {
+                        *static_cast<DWORD *>(excludeMemory) = 0;
+                        GlobalUnlock(excludeHandle);
+                        if (SetClipboardData(excludeFormat, excludeHandle))
+                            excludeHandle = nullptr;
+                    }
+                }
+            }
+        }
+
+        success = true;
+    } while (false);
+
+    if (textHandle)
+        GlobalFree(textHandle);
+    if (excludeHandle)
+        GlobalFree(excludeHandle);
+    CloseClipboard();
+    return success;
+}
 
 QUrl buildApiUrl(const QString &baseUrl, const QString &pathSuffix) {
     QUrl url(baseUrl.trimmed());
@@ -376,6 +476,7 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     , requestInFlight(false)
     , responseScrollDragActive(false)
     , pendingResponseViewUpdate(false)
+    , originalClipboardWasEmpty(true)
     , menuActiveIndex(-1) {
     setAttribute(Qt::WA_DeleteOnClose, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
@@ -440,15 +541,18 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
             hide();
             showLoadingIndicator();
 
+            saveOriginalClipboard();
             const QString original = captureSelectedText();
+            const TaskDefinition task = tasks.at(i);
+            restoreOriginalClipboard();
             if (original.isEmpty()) {
+                clearOriginalClipboardSnapshot();
                 hideLoadingIndicator();
                 return;
             }
 
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            const TaskDefinition task = tasks.at(i);
-            clipboard->setText(task.prompt + original);
+            if (!task.insertMode)
+                clearOriginalClipboardSnapshot();
 
             startConversation(task, original);
         });
@@ -468,13 +572,18 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
 }
 
 TaskWindow::~TaskWindow() {
+    restoreOriginalClipboard();
+    clearOriginalClipboardSnapshot();
     removeMenuHooks();
     hideLoadingIndicator();
 }
 
 QString TaskWindow::captureSelectedText() {
     QClipboard *clipboard = QGuiApplication::clipboard();
-    clipboard->clear(QClipboard::Clipboard);
+    const QString marker = QStringLiteral("DesktopLLMHelper-clipboard-marker-%1")
+                               .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    setClipboardText(marker, true);
+
     INPUT copyInputs[4] = {};
     copyInputs[0].type = INPUT_KEYBOARD;
     copyInputs[0].ki.wVk = VK_CONTROL;
@@ -490,13 +599,54 @@ QString TaskWindow::captureSelectedText() {
 
     QElapsedTimer timer;
     timer.start();
-    while (timer.elapsed() < 200) {
+    while (timer.elapsed() < 500) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         const QString text = clipboard->text();
-        if (!text.isEmpty())
+        if (!text.isEmpty() && text != marker)
             return text;
     }
     return QString();
+}
+
+void TaskWindow::saveOriginalClipboard() {
+    const QClipboard *clipboard = QGuiApplication::clipboard();
+    const QMimeData *currentData = clipboard ? clipboard->mimeData(QClipboard::Clipboard) : nullptr;
+    originalClipboardWasEmpty = !hasClipboardData(currentData);
+    originalClipboardData = cloneMimeData(currentData);
+}
+
+void TaskWindow::restoreOriginalClipboard() {
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard || !originalClipboardData)
+        return;
+
+    if (originalClipboardWasEmpty) {
+        clipboard->clear(QClipboard::Clipboard);
+        return;
+    }
+
+    std::unique_ptr<QMimeData> restored = cloneMimeData(originalClipboardData.get());
+    addClipboardHistoryExclusion(restored.get());
+    clipboard->setMimeData(restored.release(), QClipboard::Clipboard);
+}
+
+void TaskWindow::clearOriginalClipboardSnapshot() {
+    originalClipboardData.reset();
+    originalClipboardWasEmpty = true;
+}
+
+void TaskWindow::setClipboardText(const QString &text, bool excludeFromHistory) {
+    if (setWindowsClipboardText(text, excludeFromHistory))
+        return;
+
+    auto mimeData = std::make_unique<QMimeData>();
+    mimeData->setText(text);
+    if (excludeFromHistory)
+        addClipboardHistoryExclusion(mimeData.get());
+
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (clipboard)
+        clipboard->setMimeData(mimeData.release(), QClipboard::Clipboard);
 }
 
 QString TaskWindow::applyCharLimit(const QString &text) const {
@@ -630,6 +780,7 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
             }
             reply->deleteLater();
             setRequestInFlight(false);
+            clearOriginalClipboardSnapshot();
             return;
         }
         const QString errStr = reply->errorString();
@@ -641,6 +792,7 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
                                   .arg(statusCode));
         reply->deleteLater();
         setRequestInFlight(false);
+        clearOriginalClipboardSnapshot();
         return;
     }
 
@@ -654,8 +806,11 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
         appendMessageToHistory("assistant", pendingResponseText);
 
     if (task.insertMode) {
-        if (!pendingResponseText.isEmpty())
+        if (!pendingResponseText.isEmpty()) {
             insertResponse(pendingResponseText);
+        } else {
+            clearOriginalClipboardSnapshot();
+        }
         pendingResponseText.clear();
         setRequestInFlight(false);
         return;
@@ -673,8 +828,7 @@ void TaskWindow::handleReplyFinished(const TaskDefinition &task, QNetworkReply *
 }
 
 void TaskWindow::insertResponse(const QString &text) {
-    QClipboard *clipboard = QGuiApplication::clipboard();
-    clipboard->setText(text);
+    setClipboardText(text, true);
 
     INPUT pasteInputs[4] = {};
     pasteInputs[0].type = INPUT_KEYBOARD;
@@ -688,6 +842,11 @@ void TaskWindow::insertResponse(const QString &text) {
     pasteInputs[3].ki.wVk = VK_CONTROL;
     pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, pasteInputs, sizeof(INPUT));
+
+    QTimer::singleShot(250, this, [this]() {
+        restoreOriginalClipboard();
+        clearOriginalClipboardSnapshot();
+    });
 }
 
 void TaskWindow::ensureResponseWindow() {
