@@ -40,7 +40,7 @@
      </widget>
      </item>
      <item>
-      <widget class="QComboBox" name="comboBoxModel">
+      <widget class="ModelSelectBox" name="modelSelectBoxModel">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
          <horstretch>1</horstretch>
@@ -48,9 +48,6 @@
         </sizepolicy>
        </property>
       </widget>
-     </item>
-     <item>
-      <widget class="QToolButton" name="toolButtonRefreshModels"/>
      </item>
     </layout>
    </item>
@@ -114,6 +111,13 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ModelSelectBox</class>
+   <extends>QPushButton</extends>
+   <header>modelselectbox.h</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

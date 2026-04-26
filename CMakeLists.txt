@@ -21,6 +21,11 @@ set(PROJECT_SOURCES
         mainwindow.cpp
         mainwindow.h
         mainwindow.ui
+        modelselectbox.cpp
+        modelselectbox.h
+        modelinfo.h
+        modellistloader.cpp
+        modellistloader.h
         configstore.cpp
         configstore.h
         taskwidget.cpp
@@ -57,6 +62,8 @@ target_link_libraries(DesktopLLMHelper
         Qt${QT_VERSION_MAJOR}::Network
         user32
 )
+
+target_include_directories(DesktopLLMHelper PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Для MSVC: обеспечить корректное значение __cplusplus
 if(MSVC)

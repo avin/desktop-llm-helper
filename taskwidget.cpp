@@ -1,15 +1,12 @@
 #include "taskwidget.h"
 #include "ui_taskwidget.h"
 #include "configstore.h"
+#include "modelselectbox.h"
 #include <QLineEdit>
 #include <QTextEdit>
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
-#include <QComboBox>
-#include <QSignalBlocker>
-#include <QStyle>
-#include <QToolButton>
 #include <QHBoxLayout>
 
 namespace {
@@ -32,20 +29,14 @@ TaskWidget::TaskWidget(QWidget *parent)
             this, &TaskWidget::configChanged);
     connect(ui->doubleSpinBoxTemperature, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &TaskWidget::configChanged);
-    connect(ui->comboBoxModel, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    ui->modelSelectBoxModel->setEmptyLabel(tr(kDefaultModelLabel));
+    connect(ui->modelSelectBoxModel, &ModelSelectBox::currentModelChanged,
             this, &TaskWidget::configChanged);
-
-    ui->toolButtonRefreshModels->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-    ui->toolButtonRefreshModels->setToolTip(tr("Refresh models"));
-    ui->toolButtonRefreshModels->setAutoRaise(true);
-    connect(ui->toolButtonRefreshModels, &QToolButton::clicked,
+    connect(ui->modelSelectBoxModel, &ModelSelectBox::modelsReloadRequested,
             this, &TaskWidget::refreshModelsRequested);
 
     ui->horizontalLayoutModel->setStretch(0, 0);
     ui->horizontalLayoutModel->setStretch(1, 1);
-    ui->horizontalLayoutModel->setStretch(2, 0);
-
-    ui->comboBoxModel->addItem(tr(kDefaultModelLabel), QString());
 }
 
 TaskWidget::~TaskWidget() {
@@ -61,13 +52,7 @@ QString TaskWidget::prompt() const {
 }
 
 QString TaskWidget::modelName() const {
-    const QVariant data = ui->comboBoxModel->currentData();
-    if (data.isValid())
-        return data.toString();
-    const QString text = ui->comboBoxModel->currentText();
-    if (text == QLatin1String(kDefaultModelLabel))
-        return QString();
-    return text;
+    return ui->modelSelectBoxModel->currentModel();
 }
 
 bool TaskWidget::insertMode() const {
@@ -87,20 +72,7 @@ void TaskWidget::setModelName(const QString &modelName) {
     if (normalized == QLatin1String(kDefaultModelLabel))
         normalized.clear();
 
-    QSignalBlocker blocker(ui->comboBoxModel);
-    if (ui->comboBoxModel->count() == 0)
-        ui->comboBoxModel->addItem(tr(kDefaultModelLabel), QString());
-
-    int index = normalized.isEmpty()
-        ? ui->comboBoxModel->findData(QString())
-        : ui->comboBoxModel->findData(normalized);
-    if (index < 0 && !normalized.isEmpty()) {
-        ui->comboBoxModel->addItem(normalized, normalized);
-        index = ui->comboBoxModel->findData(normalized);
-    }
-    if (index < 0)
-        index = 0;
-    ui->comboBoxModel->setCurrentIndex(index);
+    ui->modelSelectBoxModel->setCurrentModel(normalized);
 }
 
 void TaskWidget::setInsertMode(bool insert) {
@@ -124,30 +96,6 @@ void TaskWidget::setMaxTokens(int tokens) {
 
 void TaskWidget::setTemperature(double temp) {
     ui->doubleSpinBoxTemperature->setValue(temp);
-}
-
-void TaskWidget::setAvailableModels(const QStringList &models) {
-    const QString selected = modelName();
-
-    QSignalBlocker blocker(ui->comboBoxModel);
-    ui->comboBoxModel->clear();
-    ui->comboBoxModel->addItem(tr(kDefaultModelLabel), QString());
-    for (const QString &model : models)
-        ui->comboBoxModel->addItem(model, model);
-
-    if (!selected.isEmpty() && ui->comboBoxModel->findData(selected) < 0)
-        ui->comboBoxModel->addItem(selected, selected);
-
-    int index = selected.isEmpty()
-        ? ui->comboBoxModel->findData(QString())
-        : ui->comboBoxModel->findData(selected);
-    if (index < 0)
-        index = 0;
-    ui->comboBoxModel->setCurrentIndex(index);
-}
-
-void TaskWidget::setRefreshEnabled(bool enabled) {
-    ui->toolButtonRefreshModels->setEnabled(enabled);
 }
 
 void TaskWidget::setResponseWindowSize(const QSize &size) {

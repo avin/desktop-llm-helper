@@ -3,6 +3,8 @@
 #include "taskwidget.h"
 #include "taskwindow.h"
 #include "hotkeymanager.h"
+#include "modelselectbox.h"
+#include "modellistloader.h"
 
 #include <QDir>
 #include <QFile>
@@ -26,17 +28,8 @@
 #include <QApplication>
 #include <QVariant>
 #include <QMessageBox>
-#include <QComboBox>
-#include <QToolButton>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QNetworkProxy>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QSignalBlocker>
 #include <QStandardPaths>
-#include <QUrl>
+#include <QThread>
 
 #include <functional>
 
@@ -47,41 +40,6 @@ QPointer<MainWindow> MainWindow::instance = nullptr;
 namespace {
 constexpr const char kAddTabMarker[] = "add_tab";
 constexpr const char kDefaultModelLabel[] = "Default";
-
-QUrl buildApiUrl(const QString &baseUrl, const QString &pathSuffix) {
-    QUrl url(baseUrl.trimmed());
-    if (!url.isValid())
-        return QUrl();
-    QString path = url.path();
-    if (!path.endsWith('/'))
-        path += '/';
-    QString suffix = pathSuffix;
-    if (suffix.startsWith('/'))
-        suffix.remove(0, 1);
-    url.setPath(path + suffix);
-    return url;
-}
-
-void applyProxyToManager(QNetworkAccessManager *manager, const QString &proxyText) {
-    if (!manager)
-        return;
-    const QString trimmed = proxyText.trimmed();
-    if (trimmed.isEmpty()) {
-        QNetworkProxy proxy;
-        proxy.setType(QNetworkProxy::NoProxy);
-        manager->setProxy(proxy);
-        return;
-    }
-    QUrl proxyUrl(trimmed);
-    if (!proxyUrl.isValid()) {
-        QNetworkProxy proxy;
-        proxy.setType(QNetworkProxy::NoProxy);
-        manager->setProxy(proxy);
-        return;
-    }
-    QNetworkProxy proxy(QNetworkProxy::HttpProxy, proxyUrl.host(), proxyUrl.port());
-    manager->setProxy(proxy);
-}
 
 class TaskTabBar : public QTabBar {
 public:
@@ -436,14 +394,16 @@ MainWindow::MainWindow(QWidget *parent)
       , loadingConfig(false)
       , trayIcon(nullptr)
       , menuWindow(nullptr)
-      , modelNetworkManager(new QNetworkAccessManager(this)) {
+      , modelLoaderThread(new QThread(this))
+      , modelListLoader(new ModelListLoader)
+      , nextModelRequestId(0)
+      , hasCachedModelList(false) {
     instance = this;
+    qRegisterMetaType<ModelInfoList>("ModelInfoList");
     ui->setupUi(this);
     // Include application name in the window title
     setWindowTitle(QCoreApplication::applicationName() + " - " + tr("Settings"));
-    ui->toolButtonRefreshModels->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-    ui->toolButtonRefreshModels->setToolTip(tr("Refresh models"));
-    ui->toolButtonRefreshModels->setAutoRaise(true);
+    ui->modelSelectBoxModelName->setEmptyLabel(tr("Not selected"));
 
     auto *oldTabs = ui->tasksTabWidget;
     auto *newTabs = new TaskTabWidget(ui->tab_2);
@@ -471,13 +431,13 @@ MainWindow::MainWindow(QWidget *parent)
     ensureAddTab();
 
     connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
-    connect(ui->comboBoxModelName, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(ui->modelSelectBoxModelName, &ModelSelectBox::currentModelChanged,
             this, &MainWindow::saveConfig);
     connect(ui->lineEditApiKey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditProxy, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditHotkey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditMaxChars, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
-    connect(ui->toolButtonRefreshModels, &QToolButton::clicked,
+    connect(ui->modelSelectBoxModelName, &ModelSelectBox::modelsReloadRequested,
             this, &MainWindow::requestModelList);
     connect(ui->pushButtonExportSettings, &QPushButton::clicked,
             this, &MainWindow::exportSettings);
@@ -491,12 +451,24 @@ MainWindow::MainWindow(QWidget *parent)
     connect(hotkeyManager, &HotkeyManager::hotkeyPressed,
             this, &MainWindow::handleGlobalHotkey);
 
+    modelListLoader->moveToThread(modelLoaderThread);
+    connect(modelLoaderThread, &QThread::finished, modelListLoader, &QObject::deleteLater);
+    connect(this, &MainWindow::modelListLoadRequested,
+            modelListLoader, &ModelListLoader::loadModels);
+    connect(modelListLoader, &ModelListLoader::modelsLoaded,
+            this, &MainWindow::handleModelListLoaded);
+    connect(modelListLoader, &ModelListLoader::loadFailed,
+            this, &MainWindow::handleModelListFailed);
+    modelLoaderThread->start();
+
     loadConfig();
     hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
 MainWindow::~MainWindow() {
     GlobalKeyInterceptor::stop();
+    modelLoaderThread->quit();
+    modelLoaderThread->wait();
     delete ui;
     instance = nullptr;
 }
@@ -679,7 +651,7 @@ void MainWindow::applyConfig(const AppConfig &config) {
     ui->lineEditProxy->setText(config.settings.proxy);
     ui->lineEditHotkey->setText(config.settings.hotkey);
     ui->lineEditMaxChars->setText(QString::number(config.settings.maxChars));
-    updateModelCombos(config.settings.modelName);
+    setDefaultModel(config.settings.modelName);
 
     clearTasks();
     for (const TaskDefinition &task : config.tasks)
@@ -717,7 +689,6 @@ QList<TaskDefinition> MainWindow::currentTaskDefinitions() const {
 void MainWindow::addTaskTab(const TaskDefinition &definition, bool makeCurrent) {
     auto *task = new TaskWidget;
     task->applyDefinition(definition);
-    task->setAvailableModels(availableModels);
     connectTaskSignals(task);
 
     QString tabLabel = task->name().isEmpty() ? tr("<Unnamed>") : task->name();
@@ -795,103 +766,61 @@ void MainWindow::ensureAddTabLast() {
 }
 
 QString MainWindow::currentDefaultModel() const {
-    const QVariant data = ui->comboBoxModelName->currentData();
-    if (data.isValid())
-        return data.toString();
-    return ui->comboBoxModelName->currentText().trimmed();
+    return ui->modelSelectBoxModelName->currentModel();
 }
 
-void MainWindow::updateModelCombos(const QString &defaultModel) {
-    QString normalized = defaultModel;
+void MainWindow::setDefaultModel(const QString &defaultModel) {
+    QString normalized = defaultModel.trimmed();
     if (normalized == QLatin1String(kDefaultModelLabel))
         normalized.clear();
-
-    QSignalBlocker blocker(ui->comboBoxModelName);
-    ui->comboBoxModelName->clear();
-    if (availableModels.isEmpty() && normalized.isEmpty())
-        ui->comboBoxModelName->addItem(tr("Select model"), QString());
-    for (const QString &model : availableModels)
-        ui->comboBoxModelName->addItem(model, model);
-    if (!normalized.isEmpty() && ui->comboBoxModelName->findData(normalized) < 0)
-        ui->comboBoxModelName->addItem(normalized, normalized);
-    int index = -1;
-    if (!normalized.isEmpty())
-        index = ui->comboBoxModelName->findData(normalized);
-    else if (!availableModels.isEmpty())
-        index = 0;
-    if (index < 0)
-        index = ui->comboBoxModelName->count() > 0 ? 0 : -1;
-    ui->comboBoxModelName->setCurrentIndex(index);
-
-    for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
-        if (isAddTabIndex(i))
-            continue;
-        if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i)))
-            task->setAvailableModels(availableModels);
-    }
+    ui->modelSelectBoxModelName->setCurrentModel(normalized);
 }
 
-void MainWindow::applyModelList(const QStringList &models) {
-    availableModels = models;
-    updateModelCombos(currentDefaultModel());
-}
+void MainWindow::requestModelList(ModelSelectBox *target, int generation) {
+    QPointer<ModelSelectBox> targetSelector(target);
+    if (!targetSelector)
+        return;
 
-void MainWindow::setModelRefreshEnabled(bool enabled) {
-    ui->toolButtonRefreshModels->setEnabled(enabled);
-    for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
-        if (isAddTabIndex(i))
-            continue;
-        if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i)))
-            task->setRefreshEnabled(enabled);
-    }
-}
+    const ModelListRequestParams params{
+        ui->lineEditApiEndpoint->text().trimmed(),
+        ui->lineEditApiKey->text().trimmed(),
+        ui->lineEditProxy->text().trimmed()
+    };
 
-void MainWindow::requestModelList() {
-    const QUrl url = buildApiUrl(ui->lineEditApiEndpoint->text(), "models");
-    if (!url.isValid() || url.isEmpty()) {
-        QMessageBox::warning(this, tr("Model List Error"), tr("Invalid API base URL."));
+    if (hasCachedModelList && cachedModelListParams == params) {
+        targetSelector->setModels(cachedModelList);
         return;
     }
 
-    applyProxyToManager(modelNetworkManager, ui->lineEditProxy->text());
-    setModelRefreshEnabled(false);
+    const int requestId = ++nextModelRequestId;
+    pendingModelRequests.insert(requestId, PendingModelRequest{targetSelector, generation, params});
+    emit modelListLoadRequested(requestId, params.baseUrl, params.apiKey, params.proxyText);
+}
 
-    QNetworkRequest request(url);
-    const QString apiKey = ui->lineEditApiKey->text().trimmed();
-    if (!apiKey.isEmpty())
-        request.setRawHeader("Authorization", "Bearer " + apiKey.toUtf8());
+void MainWindow::handleModelListLoaded(int requestId, const ModelInfoList &models) {
+    if (!pendingModelRequests.contains(requestId))
+        return;
 
-    QNetworkReply *reply = modelNetworkManager->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        setModelRefreshEnabled(true);
-        const QByteArray payload = reply->readAll();
-        if (reply->error() != QNetworkReply::NoError) {
-            QMessageBox::warning(this, tr("Model List Error"),
-                                 tr("Failed to load models: %1").arg(reply->errorString()));
-            reply->deleteLater();
-            return;
-        }
+    const PendingModelRequest request = pendingModelRequests.take(requestId);
+    hasCachedModelList = true;
+    cachedModelListParams = request.params;
+    cachedModelList = models;
 
-        const QJsonDocument doc = QJsonDocument::fromJson(payload);
-        if (!doc.isObject()) {
-            QMessageBox::warning(this, tr("Model List Error"), tr("Invalid response format."));
-            reply->deleteLater();
-            return;
-        }
+    if (!request.target || request.target->currentReloadGeneration() != request.generation)
+        return;
 
-        const QJsonArray data = doc.object().value("data").toArray();
-        QStringList models;
-        for (const QJsonValue &value : data) {
-            if (!value.isObject())
-                continue;
-            const QString id = value.toObject().value("id").toString();
-            if (!id.isEmpty() && id != QLatin1String(kDefaultModelLabel))
-                models.append(id);
-        }
-        models.removeDuplicates();
-        applyModelList(models);
-        reply->deleteLater();
-    });
+    request.target->setModels(models);
+}
+
+void MainWindow::handleModelListFailed(int requestId, const QString &message) {
+    if (!pendingModelRequests.contains(requestId))
+        return;
+
+    const PendingModelRequest request = pendingModelRequests.take(requestId);
+    if (!request.target || request.target->currentReloadGeneration() != request.generation)
+        return;
+
+    request.target->setLoadError(message);
 }
 
 void MainWindow::handleGlobalHotkey() {

@@ -3,7 +3,6 @@
 
 #include <QWidget>
 #include <QString>
-#include <QStringList>
 #include <QSize>
 
 namespace Ui {
@@ -11,6 +10,7 @@ namespace Ui {
 }
 
 struct TaskDefinition;
+class ModelSelectBox;
 
 class TaskWidget : public QWidget {
     Q_OBJECT
@@ -32,8 +32,6 @@ public:
     double temperature() const;
     void setMaxTokens(int tokens);
     void setTemperature(double temp);
-    void setAvailableModels(const QStringList &models);
-    void setRefreshEnabled(bool enabled);
 
     void setResponseWindowSize(const QSize &size);
     void setResponseZoom(int zoom);
@@ -43,7 +41,7 @@ public:
 
 signals:
     void configChanged();
-    void refreshModelsRequested();
+    void refreshModelsRequested(ModelSelectBox *target, int generation);
 
 private:
     Ui::TaskWidget *ui;

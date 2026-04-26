@@ -7,12 +7,13 @@
 #include <QList>
 #include <QSystemTrayIcon>
 #include <QCloseEvent>
+#include <QHash>
 #include <QPointer>
 #include <QSize>
-#include <QStringList>
 
 #include "hotkeymanager.h"
 #include "configstore.h"
+#include "modelinfo.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -20,7 +21,9 @@ QT_END_NAMESPACE
 
 class TaskWidget;
 class TaskWindow;
-class QNetworkAccessManager;
+class ModelSelectBox;
+class ModelListLoader;
+class QThread;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -47,11 +50,35 @@ private slots:
     void removeTaskWidget(TaskWidget *task);
     void updateTaskResponsePrefs(int taskIndex, const QSize &size, int zoom);
     void commitTaskResponsePrefs();
-    void requestModelList();
+    void requestModelList(ModelSelectBox *target, int generation);
+    void handleModelListLoaded(int requestId, const ModelInfoList &models);
+    void handleModelListFailed(int requestId, const QString &message);
     void exportSettings();
     void importSettings();
 
+signals:
+    void modelListLoadRequested(int requestId, const QString &baseUrl,
+                                const QString &apiKey, const QString &proxyText);
+
 private:
+    struct ModelListRequestParams {
+        QString baseUrl;
+        QString apiKey;
+        QString proxyText;
+
+        bool operator==(const ModelListRequestParams &other) const {
+            return baseUrl == other.baseUrl
+                && apiKey == other.apiKey
+                && proxyText == other.proxyText;
+        }
+    };
+
+    struct PendingModelRequest {
+        QPointer<ModelSelectBox> target;
+        int generation = 0;
+        ModelListRequestParams params;
+    };
+
     Ui::MainWindow *ui;
     QString prevHotkey;
     bool hotkeyCaptured;
@@ -59,8 +86,13 @@ private:
     bool loadingConfig;
     QSystemTrayIcon *trayIcon;
     QPointer<TaskWindow> menuWindow;
-    QNetworkAccessManager *modelNetworkManager;
-    QStringList availableModels;
+    QThread *modelLoaderThread;
+    ModelListLoader *modelListLoader;
+    int nextModelRequestId;
+    QHash<int, PendingModelRequest> pendingModelRequests;
+    bool hasCachedModelList;
+    ModelListRequestParams cachedModelListParams;
+    ModelInfoList cachedModelList;
 
     void createTrayIcon();
     void loadConfig();
@@ -77,9 +109,7 @@ private:
     bool isAddTabIndex(int index) const;
     void ensureAddTab();
     void ensureAddTabLast();
-    void applyModelList(const QStringList &models);
-    void updateModelCombos(const QString &defaultModel);
-    void setModelRefreshEnabled(bool enabled);
+    void setDefaultModel(const QString &defaultModel);
     QString currentDefaultModel() const;
     QString suggestedSettingsPath() const;
 };
