@@ -49,6 +49,7 @@ jobs:
     - name: Prepare installer package
       shell: pwsh
       run: |
+        .\scripts\prepare_installer_metadata.ps1 -Version "${{ steps.get_version.outputs.VERSION }}"
         $dataDir = "installer\packages\com.desktopllmhelper\data"
         if (Test-Path $dataDir) {
             Remove-Item -Recurse -Force $dataDir
