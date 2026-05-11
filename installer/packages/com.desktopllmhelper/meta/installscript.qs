@@ -1,3 +1,48 @@
+function quoteForPowerShell(value)
+{
+    return "'" + String(value).split("'").join("''") + "'";
+}
+
+function removeOldUninstallEntries()
+{
+    var targetDir = installer.toNativeSeparators(installer.value("TargetDir"));
+    var command =
+        "$targetDir = [System.IO.Path]::GetFullPath(" + quoteForPowerShell(targetDir) + "); " +
+        "$normalizedTargetDir = $targetDir.TrimEnd([char]92); " +
+        "$root = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; " +
+        "if (Test-Path $root) { " +
+        "Get-ChildItem $root | ForEach-Object { " +
+        "$item = Get-ItemProperty $_.PSPath; " +
+        "$displayName = [string]$item.DisplayName; " +
+        "if ($displayName -eq 'DesktopLLMHelper' -or $displayName -eq 'Desktop LLM Helper') { " +
+        "$matchesTarget = $false; " +
+        "if ($item.InstallLocation) { " +
+        "try { " +
+        "$installLocation = [System.IO.Path]::GetFullPath([string]$item.InstallLocation).TrimEnd([char]92); " +
+        "$matchesTarget = $installLocation -ieq $normalizedTargetDir; " +
+        "} catch {} " +
+        "} " +
+        "if (-not $matchesTarget -and $item.UninstallString) { " +
+        "$matchesTarget = ([string]$item.UninstallString).IndexOf($targetDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0; " +
+        "} " +
+        "if ($matchesTarget) { Remove-Item $_.PSPath -Recurse -Force; } " +
+        "} " +
+        "} " +
+        "}";
+
+    try {
+        installer.execute("powershell.exe", [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command
+        ]);
+    } catch(e) {
+        console.log("Failed to remove old DesktopLLMHelper uninstall entries: " + e);
+    }
+}
+
 function Component()
 {
     installer.finishButtonClicked.connect(this, Component.prototype.launchApplication);
@@ -25,6 +70,8 @@ Component.prototype.createOperations = function()
         } catch(e) {
             console.log("Failed to terminate running DesktopLLMHelper: " + e);
         }
+
+        removeOldUninstallEntries();
     }
     // perform the default file-install operations
     component.createOperations();

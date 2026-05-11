@@ -10,6 +10,8 @@ if "%PROJECT_ROOT:~-1%"=="\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 set "BUILD_DIR=%PROJECT_ROOT%\build"
 set "DEPLOY_DIR=%BUILD_DIR%\deploy"
 set "INSTALLER_DIR=%PROJECT_ROOT%\installer-output"
+set "APP_VERSION=%~1"
+if "%APP_VERSION%"=="" set "APP_VERSION=1.0.0"
 :: Clean build directory before starting
 if exist "%BUILD_DIR%" rd /s /q "%BUILD_DIR%"
 
@@ -81,6 +83,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_ROOT%\scripts\prepare_installer_metadata.ps1" -Version "%APP_VERSION%"
+if errorlevel 1 (
+    echo [Error] Failed to prepare installer metadata.
+    pause
+    exit /b 1
+)
+
 :: Verify installer configuration
 if not exist "%PROJECT_ROOT%\installer\config\config.xml" (
     echo [Error] Installer config not found: %PROJECT_ROOT%\installer\config\config.xml
@@ -99,7 +108,7 @@ mkdir "%INSTALLER_DIR%"
 "%IFW_DIR%\bin\binarycreator.exe" ^
     --config "%PROJECT_ROOT%\installer\config\config.xml" ^
     --packages "%PROJECT_ROOT%\installer\packages" ^
-    "%INSTALLER_DIR%\DesktopLLMHelperInstaller.exe"
+    "%INSTALLER_DIR%\DesktopLLMHelperInstaller-%APP_VERSION%.exe"
 if errorlevel 1 (
     echo [Error] Installer creation failed.
     pause
