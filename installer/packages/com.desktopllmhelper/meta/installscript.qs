@@ -1,18 +1,13 @@
-function Component()
-{
-    installer.finishButtonClicked.connect(this, Component.prototype.launchApplication);
-}
-
-Component.prototype.quoteForPowerShell = function(value)
+function quoteForPowerShell(value)
 {
     return "'" + String(value).split("'").join("''") + "'";
 }
 
-Component.prototype.removeOldUninstallEntries = function()
+function removeOldUninstallEntries()
 {
     var targetDir = installer.toNativeSeparators(installer.value("TargetDir"));
     var command =
-        "$targetDir = [System.IO.Path]::GetFullPath(" + this.quoteForPowerShell(targetDir) + "); " +
+        "$targetDir = [System.IO.Path]::GetFullPath(" + quoteForPowerShell(targetDir) + "); " +
         "$normalizedTargetDir = $targetDir.TrimEnd([char]92); " +
         "$root = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'; " +
         "if (Test-Path $root) { " +
@@ -48,6 +43,11 @@ Component.prototype.removeOldUninstallEntries = function()
     }
 }
 
+function Component()
+{
+    installer.finishButtonClicked.connect(this, Component.prototype.launchApplication);
+}
+
 Component.prototype.launchApplication = function()
 {
     try {
@@ -71,7 +71,7 @@ Component.prototype.createOperations = function()
             console.log("Failed to terminate running DesktopLLMHelper: " + e);
         }
 
-        this.removeOldUninstallEntries();
+        removeOldUninstallEntries();
     }
     // perform the default file-install operations
     component.createOperations();
