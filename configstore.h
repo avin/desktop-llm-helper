@@ -20,6 +20,8 @@ struct TaskDefinition {
     QString name;
     QString prompt;
     QString modelName;
+    QString hotkey;
+    bool showInMenu = true;
     bool insertMode = true;
     int maxTokens = 300;
     double temperature = 0.5;

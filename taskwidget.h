@@ -12,6 +12,7 @@ namespace Ui {
 
 struct TaskDefinition;
 class ModelSelectBox;
+class QLineEdit;
 
 class TaskWidget : public QWidget {
     Q_OBJECT
@@ -43,6 +44,7 @@ public:
 
     TaskDefinition toDefinition() const;
     void applyDefinition(const TaskDefinition &definition);
+    QLineEdit *hotkeyEdit() const;
 
 signals:
     void configChanged();

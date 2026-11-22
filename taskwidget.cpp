@@ -23,6 +23,9 @@ TaskWidget::TaskWidget(QWidget *parent)
 
     connect(ui->lineEditName, &QLineEdit::textChanged, this, &TaskWidget::configChanged);
     connect(ui->textEditPrompt, &QTextEdit::textChanged, this, &TaskWidget::configChanged);
+    connect(ui->checkBoxShowInMenu, &QCheckBox::toggled, this, &TaskWidget::configChanged);
+    connect(ui->lineEditTaskHotkey, &QLineEdit::textChanged, this, &TaskWidget::configChanged);
+    connect(ui->pushButtonClearHotkey, &QToolButton::clicked, ui->lineEditTaskHotkey, &QLineEdit::clear);
     connect(ui->radioInsert, &QRadioButton::toggled, this, &TaskWidget::configChanged);
     connect(ui->radioWindow, &QRadioButton::toggled, this, &TaskWidget::configChanged);
 
@@ -149,6 +152,8 @@ TaskDefinition TaskWidget::toDefinition() const {
     def.prompt = prompt();
     def.modelName = modelName();
     def.modelParameters = modelParameters();
+    def.hotkey = ui->lineEditTaskHotkey->text();
+    def.showInMenu = ui->checkBoxShowInMenu->isChecked();
     def.insertMode = insertMode();
     def.maxTokens = maxTokens();
     def.temperature = temperature();
@@ -163,10 +168,16 @@ void TaskWidget::applyDefinition(const TaskDefinition &definition) {
     setPrompt(definition.prompt);
     setModelName(definition.modelName);
     setModelParameters(definition.modelParameters);
+    ui->lineEditTaskHotkey->setText(definition.hotkey);
+    ui->checkBoxShowInMenu->setChecked(definition.showInMenu);
     setInsertMode(definition.insertMode);
     setMaxTokens(definition.maxTokens);
     setTemperature(definition.temperature);
     responseWidth = definition.responseWidth;
     responseHeight = definition.responseHeight;
     responseZoomValue = definition.responseZoom;
+}
+
+QLineEdit *TaskWidget::hotkeyEdit() const {
+    return ui->lineEditTaskHotkey;
 }

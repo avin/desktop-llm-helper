@@ -90,6 +90,12 @@
           </item>
           <item>
            <widget class="QPushButton" name="pushButtonModelParameters">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Minimum" vsizetype="Ignored">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
             <property name="text">
              <string>Model Parameters...</string>
             </property>
@@ -133,6 +139,7 @@
         </item>
         <item row="5" column="1">
          <widget class="QLineEdit" name="lineEditHotkey">
+          <property name="readOnly"><bool>true</bool></property>
           <property name="maximumSize">
            <size>
             <width>200</width>

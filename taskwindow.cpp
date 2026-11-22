@@ -1,4 +1,5 @@
 #include "taskwindow.h"
+#include "hotkeymanager.h"
 
 #include <QClipboard>
 #include <QAbstractTextDocumentLayout>
@@ -29,6 +30,7 @@
 #include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QStyle>
 #include <QStringList>
@@ -586,7 +588,9 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     connect(requestWorker, &TaskRequestWorker::finished,
             this, &TaskWindow::handleRequestFinished);
     requestThread->start();
+}
 
+void TaskWindow::showMenu() {
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(10, 10, 10, 10);
     mainLayout->setSpacing(0);
@@ -610,6 +614,8 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
 
     for (int i = 0; i < tasks.size(); ++i) {
         const TaskDefinition &task = tasks.at(i);
+        if (!task.showInMenu)
+            continue;
         QString text = task.name.isEmpty() ? tr("<Unnamed>") : task.name;
         auto *btn = new QPushButton(text, container);
         btn->setStyleSheet(
@@ -625,30 +631,12 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
             "   background-color: #e5f1fb;"
             "}"
         );
-        btn->setProperty("menuIndex", i);
+        btn->setProperty("menuIndex", menuButtons.size());
         btn->setMouseTracking(true);
         btn->installEventFilter(this);
         menuButtons.append(btn);
         connect(btn, &QPushButton::clicked, this, [this, i]() {
-            activeTaskIndex = i;
-            const TaskDefinition task = tasks.at(i);
-            hide();
-            if (task.insertMode)
-                showLoadingIndicator();
-
-            saveOriginalClipboard();
-            const QString original = captureSelectedText();
-            restoreOriginalClipboard();
-            if (original.isEmpty()) {
-                clearOriginalClipboardSnapshot();
-                hideLoadingIndicator();
-                return;
-            }
-
-            if (!task.insertMode)
-                clearOriginalClipboardSnapshot();
-
-            startConversation(task, original);
+            runTask(i);
         });
         layout->addWidget(btn);
     }
@@ -663,6 +651,33 @@ TaskWindow::TaskWindow(const QList<TaskDefinition> &taskList,
     applyNoActivateStyle();
     show();
     raise();
+}
+
+void TaskWindow::runTask(int taskIndex) {
+    QScopedValueRollback<bool> captureGuard(capturingSelection, true);
+    activeTaskIndex = taskIndex;
+    const TaskDefinition &task = tasks.at(taskIndex);
+    hide();
+    if (task.insertMode)
+        showLoadingIndicator();
+
+    saveOriginalClipboard();
+    const QString original = captureSelectedText();
+    restoreOriginalClipboard();
+    if (original.isEmpty()) {
+        clearOriginalClipboardSnapshot();
+        hideLoadingIndicator();
+        return;
+    }
+
+    if (!task.insertMode)
+        clearOriginalClipboardSnapshot();
+
+    startConversation(task, original);
+}
+
+bool TaskWindow::isCapturingSelection() const {
+    return capturingSelection;
 }
 
 TaskWindow::~TaskWindow() {
@@ -700,6 +715,8 @@ QString TaskWindow::captureSelectedText() {
     copyInputs[3].type = INPUT_KEYBOARD;
     copyInputs[3].ki.wVk = VK_CONTROL;
     copyInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    for (INPUT &input : copyInputs)
+        input.ki.dwExtraInfo = HotkeyManager::ClipboardInputTag;
     SendInput(4, copyInputs, sizeof(INPUT));
 
     QElapsedTimer timer;
@@ -965,6 +982,8 @@ void TaskWindow::insertResponse(const QString &text) {
     pasteInputs[3].type = INPUT_KEYBOARD;
     pasteInputs[3].ki.wVk = VK_CONTROL;
     pasteInputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    for (INPUT &input : pasteInputs)
+        input.ki.dwExtraInfo = HotkeyManager::ClipboardInputTag;
     SendInput(4, pasteInputs, sizeof(INPUT));
 
     QTimer::singleShot(250, this, [this]() {

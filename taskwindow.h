@@ -68,6 +68,10 @@ public:
                         QWidget *parent = nullptr);
     ~TaskWindow() override;
 
+    void showMenu();
+    void runTask(int taskIndex);
+    bool isCapturingSelection() const;
+
 signals:
     void taskResponsePrefsChanged(int taskIndex, const QSize &size, int zoom);
     void taskResponsePrefsCommitRequested();
@@ -112,6 +116,7 @@ private:
     int currentRequestId;
     bool sawStreamFormat;
     bool requestInFlight;
+    bool capturingSelection = false;
     bool responseScrollDragActive;
     bool pendingResponseViewUpdate;
     int responseScrollPosition = 0;

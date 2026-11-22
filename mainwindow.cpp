@@ -37,13 +37,11 @@
 #include <QMessageBox>
 #include <QStandardPaths>
 #include <QThread>
+#include <QToolTip>
 
+#include <algorithm>
 #include <functional>
 #include <limits>
-
-#include <windows.h>
-
-QPointer<MainWindow> MainWindow::instance = nullptr;
 
 namespace {
 constexpr const char kAddTabMarker[] = "add_tab";
@@ -278,126 +276,9 @@ public:
 };
 }
 
-class GlobalKeyInterceptor {
-public:
-    static bool capturing;
-    static HHOOK hookHandle;
-
-    enum ModBits { MB_CTRL = 1, MB_ALT = 2, MB_SHIFT = 4, MB_WIN = 8 };
-
-    static int modState;
-
-    static LRESULT CALLBACK hookProc(int nCode, WPARAM wParam, LPARAM lParam) {
-        if (nCode < 0)
-            return CallNextHookEx(hookHandle, nCode, wParam, lParam);
-        auto kb = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
-        if (!capturing)
-            return CallNextHookEx(hookHandle, nCode, wParam, lParam);
-        if (wParam == WM_KEYDOWN) {
-            int vk = kb->vkCode;
-            switch (vk) {
-                case VK_CONTROL:
-                case VK_LCONTROL:
-                case VK_RCONTROL:
-                    modState |= MB_CTRL;
-                    return 1;
-                case VK_MENU:
-                case VK_LMENU:
-                case VK_RMENU:
-                    modState |= MB_ALT;
-                    return 1;
-                case VK_SHIFT:
-                case VK_LSHIFT:
-                case VK_RSHIFT:
-                    modState |= MB_SHIFT;
-                    return 1;
-                case VK_LWIN:
-                case VK_RWIN:
-                    modState |= MB_WIN;
-                    return 1;
-                default: {
-                    QString seq;
-                    if (modState & MB_CTRL) seq += "Ctrl+";
-                    if (modState & MB_ALT) seq += "Alt+";
-                    if (modState & MB_SHIFT) seq += "Shift+";
-                    if (modState & MB_WIN) seq += "Win+";
-
-                    wchar_t name[64] = {0};
-                    if (GetKeyNameTextW(
-                            MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) << 16,
-                            name, 64) > 0) {
-                        seq += QString::fromWCharArray(name);
-                    } else {
-                        seq += QString::number(vk);
-                    }
-
-                    if (MainWindow::instance) {
-                        QMetaObject::invokeMethod(
-                            MainWindow::instance,
-                            "setHotkeyText",
-                            Qt::QueuedConnection,
-                            Q_ARG(QString, seq)
-                        );
-                    }
-                    modState = 0;
-                    return 1;
-                }
-            }
-        } else if (wParam == WM_KEYUP) {
-            int vk = kb->vkCode;
-            switch (vk) {
-                case VK_CONTROL:
-                case VK_LCONTROL:
-                case VK_RCONTROL:
-                    modState &= ~MB_CTRL;
-                    break;
-                case VK_MENU:
-                case VK_LMENU:
-                case VK_RMENU:
-                    modState &= ~MB_ALT;
-                    break;
-                case VK_SHIFT:
-                case VK_LSHIFT:
-                case VK_RSHIFT:
-                    modState &= ~MB_SHIFT;
-                    break;
-                case VK_LWIN:
-                case VK_RWIN:
-                    modState &= ~MB_WIN;
-                    break;
-                default: break;
-            }
-        }
-        return CallNextHookEx(hookHandle, nCode, wParam, lParam);
-    }
-
-    static void start() {
-        if (!hookHandle) {
-            hookHandle = SetWindowsHookExW(
-                WH_KEYBOARD_LL,
-                hookProc,
-                GetModuleHandleW(nullptr),
-                0
-            );
-        }
-    }
-
-    static void stop() {
-        if (hookHandle) {
-            UnhookWindowsHookEx(hookHandle);
-            hookHandle = nullptr;
-        }
-    }
-};
-
-bool GlobalKeyInterceptor::capturing = false;
-HHOOK GlobalKeyInterceptor::hookHandle = nullptr;
-int GlobalKeyInterceptor::modState = 0;
-
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
       , ui(new Ui::MainWindow)
-      , hotkeyCaptured(false)
       , hotkeyManager(new HotkeyManager(this))
       , loadingConfig(false)
       , trayIcon(nullptr)
@@ -406,7 +287,6 @@ MainWindow::MainWindow(QWidget *parent)
       , modelListLoader(new ModelListLoader)
       , nextModelRequestId(0)
       , hasCachedModelList(false) {
-    instance = this;
     qRegisterMetaType<ModelInfoList>("ModelInfoList");
     ui->setupUi(this);
     // Include application name in the window title
@@ -479,6 +359,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(hotkeyManager, &HotkeyManager::hotkeyPressed,
             this, &MainWindow::handleGlobalHotkey);
+    connect(hotkeyManager, &HotkeyManager::hotkeyCaptured,
+            this, &MainWindow::setHotkeyText);
 
     modelListLoader->moveToThread(modelLoaderThread);
     connect(modelLoaderThread, &QThread::finished, modelListLoader, &QObject::deleteLater);
@@ -491,29 +373,21 @@ MainWindow::MainWindow(QWidget *parent)
     modelLoaderThread->start();
 
     loadConfig();
-    hotkeyManager->registerHotkey(ui->lineEditHotkey->text());
 }
 
 MainWindow::~MainWindow() {
-    GlobalKeyInterceptor::stop();
     modelLoaderThread->quit();
     modelLoaderThread->wait();
     delete ui;
-    instance = nullptr;
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *ev) {
-    if (obj == ui->lineEditHotkey) {
-        if (ev->type() == QEvent::FocusIn) {
-            prevHotkey = ui->lineEditHotkey->text();
-            hotkeyCaptured = false;
-            GlobalKeyInterceptor::capturing = true;
-            GlobalKeyInterceptor::start();
-        } else if (ev->type() == QEvent::FocusOut) {
-            GlobalKeyInterceptor::capturing = false;
-            if (!hotkeyCaptured)
-                ui->lineEditHotkey->setText(prevHotkey);
-        }
+    if (ev->type() == QEvent::FocusIn) {
+        hotkeyField = qobject_cast<QLineEdit *>(obj);
+        hotkeyManager->setCapturing(!hotkeyField.isNull());
+    } else if (ev->type() == QEvent::FocusOut && obj == hotkeyField) {
+        hotkeyField.clear();
+        hotkeyManager->setCapturing(false);
     }
     return QMainWindow::eventFilter(obj, ev);
 }
@@ -524,9 +398,17 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 }
 
 void MainWindow::setHotkeyText(const QString &text) {
-    ui->lineEditHotkey->setText(text);
-    hotkeyCaptured = true;
-    saveConfig();
+    if (!hotkeyField)
+        return;
+    if (HotkeyManager::hotkeyCode(text) == HotkeyManager::hotkeyCode(hotkeyField->text()))
+        return;
+    if (hotkeyManager->isHotkeyAssigned(text)) {
+        QToolTip::showText(hotkeyField->mapToGlobal(hotkeyField->rect().bottomLeft()),
+                           tr("This hotkey is already assigned."), hotkeyField);
+        return;
+    }
+    QToolTip::hideText();
+    hotkeyField->setText(text);
 }
 
 void MainWindow::applyDefaultSettings() {
@@ -550,6 +432,7 @@ void MainWindow::loadConfig() {
     loadingConfig = true;
     applyConfig(config);
     loadingConfig = false;
+    updateHotkeys(config);
 }
 
 void MainWindow::saveConfig() {
@@ -559,7 +442,14 @@ void MainWindow::saveConfig() {
     const AppConfig config = buildConfigFromUi();
     ConfigStore::saveToFile(ConfigStore::configFilePath(), config);
 
-    hotkeyManager->registerHotkey(config.settings.hotkey);
+    updateHotkeys(config);
+}
+
+void MainWindow::updateHotkeys(const AppConfig &config) {
+    QStringList taskHotkeys;
+    for (const TaskDefinition &task : config.tasks)
+        taskHotkeys.append(task.hotkey);
+    hotkeyManager->setHotkeys(config.settings.hotkey, taskHotkeys);
 }
 
 QString MainWindow::suggestedSettingsPath() const {
@@ -733,6 +623,7 @@ void MainWindow::addTaskTab(const TaskDefinition &definition, bool makeCurrent) 
 }
 
 void MainWindow::connectTaskSignals(TaskWidget *task) {
+    task->hotkeyEdit()->installEventFilter(this);
     connect(task, &TaskWidget::configChanged, this, &MainWindow::saveConfig);
     connect(task, &TaskWidget::configChanged, this, [this, task]() {
         updateTaskTabTitle(task);
@@ -1019,17 +910,29 @@ void MainWindow::editModelParameters(TaskWidget *task) {
     });
 }
 
-void MainWindow::handleGlobalHotkey() {
-    if (menuWindow) {
-        menuWindow->close();
-        menuWindow = nullptr;
-    }
+void MainWindow::handleGlobalHotkey(int taskIndex) {
+    if (menuWindow && menuWindow->isCapturingSelection())
+        return;
+
     const AppConfig config = buildConfigFromUi();
+    const bool openMenu = taskIndex == HotkeyManager::MenuHotkey;
+    if (openMenu && std::none_of(config.tasks.cbegin(), config.tasks.cend(),
+                                [](const TaskDefinition &task) { return task.showInMenu; }))
+        return;
+    if (!openMenu && (taskIndex < 0 || taskIndex >= config.tasks.size()))
+        return;
+
+    if (menuWindow)
+        menuWindow->close();
     menuWindow = new TaskWindow(config.tasks, config.settings);
     connect(menuWindow, &TaskWindow::taskResponsePrefsChanged,
             this, &MainWindow::updateTaskResponsePrefs);
     connect(menuWindow, &TaskWindow::taskResponsePrefsCommitRequested,
             this, &MainWindow::commitTaskResponsePrefs);
+    if (openMenu)
+        menuWindow->showMenu();
+    else
+        menuWindow->runTask(taskIndex);
 }
 
 void MainWindow::createTrayIcon() {

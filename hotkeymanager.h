@@ -1,59 +1,43 @@
 #ifndef HOTKEYMANAGER_H
 #define HOTKEYMANAGER_H
 
+#include <QHash>
 #include <QObject>
-#include <QString>
+#include <QStringList>
 
-#include <QAbstractNativeEventFilter>
 #include <windows.h>
 
-/**
- * @brief Управляет глобальным хоткеем: регистрирует его и перехватывает
- *        низко-уровневым хуком WH_KEYBOARD_LL, окончательно блокируя
- *        дальнейшую обработку системой.
- *
- *  ❕ Работает только на Windows.
- */
-class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
+class HotkeyManager : public QObject {
     Q_OBJECT
 
 public:
-    explicit HotkeyManager(QObject *parent = nullptr);
+    static constexpr int MenuHotkey = -1;
+    static constexpr ULONG_PTR ClipboardInputTag = 0x444C4C4D;
 
+    explicit HotkeyManager(QObject *parent = nullptr);
     ~HotkeyManager() override;
 
-    /**
-     * @brief Регистрирует сочетание клавиш (пример: "Ctrl+Alt+H").
-     * @return true, если удалось запустить хук.
-     *
-     *  Используется только low-level-hook: хоткей не «просачивается» дальше.
-     */
-    bool registerHotkey(const QString &sequence);
-
-    /**
-     * @note Реализовано для совместимости, но не используется, так как
-     *       WM_HOTKEY здесь не генерируется. Всегда возвращает false.
-     */
-    bool nativeEventFilter(const QByteArray &eventType,
-                           void *message,
-                           qintptr *result) override;
+    void setHotkeys(const QString &menuHotkey, const QStringList &taskHotkeys);
+    void setCapturing(bool enabled);
+    bool isHotkeyAssigned(const QString &sequence) const;
+    static UINT hotkeyCode(const QString &sequence);
 
 signals:
-    /// Сигнал испускается при нажатии зарегистрированного хоткея
-    void hotkeyPressed();
+    void hotkeyCaptured(const QString &sequence);
+    void hotkeyPressed(int taskIndex);
 
 private:
-    int id; ///< (не используется) id для RegisterHotKey
-    UINT currentModifiers; ///< модификаторы (MOD_…)
-    UINT currentVk; ///< виртуальный код основной клавиши
+    HHOOK hook = nullptr;
+    QHash<UINT, int> hotkeys;
+    bool capturing = false;
+    UINT captureModifiers = 0;
+    UINT pressedTaskKey = 0;
+    UINT pendingTaskHotkey = 0;
 
-    /// Статический low-level-hook и указатель на активный менеджер
-    static HHOOK s_hook;
     static HotkeyManager *s_instance;
-
     static LRESULT CALLBACK LowLevelProc(int nCode, WPARAM wParam, LPARAM lParam);
-
-    bool parseSequence(const QString &sequence, UINT &modifiers, UINT &vk) const;
+    bool handleKey(UINT key, bool pressed);
+    void dispatchHotkey(UINT code);
 };
 
 #endif // HOTKEYMANAGER_H

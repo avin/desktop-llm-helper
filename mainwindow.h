@@ -25,6 +25,7 @@ class TaskWidget;
 class TaskWindow;
 class ModelSelectBox;
 class ModelListLoader;
+class QLineEdit;
 class QThread;
 
 class MainWindow : public QMainWindow {
@@ -33,12 +34,6 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
-
-    static QPointer<MainWindow> instance;
-
-public slots:
-    void setHotkeyText(const QString &text);
-    void handleGlobalHotkey();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -83,8 +78,7 @@ private:
     };
 
     Ui::MainWindow *ui;
-    QString prevHotkey;
-    bool hotkeyCaptured;
+    QPointer<QLineEdit> hotkeyField;
     HotkeyManager *hotkeyManager;
     bool loadingConfig;
     QSystemTrayIcon *trayIcon;
@@ -99,6 +93,9 @@ private:
     QJsonObject defaultModelParameters;
 
     void createTrayIcon();
+    void setHotkeyText(const QString &text);
+    void handleGlobalHotkey(int taskIndex);
+    void updateHotkeys(const AppConfig &config);
     void loadConfig();
     void saveConfig();
     void applyDefaultSettings();

@@ -18,6 +18,48 @@
    </layout>
   </item>
    <item>
+    <layout class="QHBoxLayout" name="horizontalLayoutActivation">
+     <item>
+      <widget class="QCheckBox" name="checkBoxShowInMenu">
+       <property name="text"><string>Show in Menu</string></property>
+       <property name="checked"><bool>true</bool></property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="activationSpacer">
+       <property name="orientation"><enum>Qt::Horizontal</enum></property>
+       <property name="sizeHint" stdset="0"><size><width>12</width><height>0</height></size></property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QLabel" name="labelTaskHotkey">
+       <property name="text"><string>Task Hotkey</string></property>
+       <property name="buddy"><cstring>lineEditTaskHotkey</cstring></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLineEdit" name="lineEditTaskHotkey">
+       <property name="readOnly"><bool>true</bool></property>
+       <property name="placeholderText"><string>Press a shortcut</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QToolButton" name="pushButtonClearHotkey">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Fixed" vsizetype="Ignored">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="focusPolicy"><enum>Qt::StrongFocus</enum></property>
+       <property name="toolTip"><string>Clear task hotkey</string></property>
+       <property name="accessibleName"><string>Clear task hotkey</string></property>
+       <property name="text"><string notr="true">&#x00D7;</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
     <widget class="QLabel" name="labelPrompt">
      <property name="text">
       <string>Prompt:</string>
@@ -51,6 +93,12 @@
      </item>
      <item>
       <widget class="QPushButton" name="pushButtonModelParameters">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Minimum" vsizetype="Ignored">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
        <property name="text">
         <string>Model Parameters...</string>
        </property>

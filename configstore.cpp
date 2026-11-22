@@ -42,6 +42,8 @@ TaskDefinition taskFromJson(const QJsonObject &obj) {
     task.prompt = obj.value("prompt").toString();
     task.modelName = normalizeModelName(obj.value("modelName").toString());
     task.modelParameters = modelParametersFromJson(obj);
+    task.hotkey = obj.value("hotkey").toString();
+    task.showInMenu = obj.value("showInMenu").toBool(true);
     task.insertMode = obj.value("insert").toBool(true);
     task.maxTokens = obj.value("maxTokens").toInt(300);
     task.temperature = obj.value("temperature").toDouble(0.5);
@@ -57,6 +59,7 @@ QJsonObject taskToJson(const TaskDefinition &task) {
     QJsonObject obj{
         {"name", task.name},
         {"prompt", task.prompt},
+        {"showInMenu", task.showInMenu},
         {"insert", task.insertMode},
         {"maxTokens", task.maxTokens},
         {"temperature", task.temperature},
@@ -66,6 +69,8 @@ QJsonObject taskToJson(const TaskDefinition &task) {
     };
     if (!task.modelName.isEmpty())
         obj.insert("modelName", task.modelName);
+    if (!task.hotkey.isEmpty())
+        obj.insert("hotkey", task.hotkey);
     if (!task.modelParameters.isEmpty())
         obj.insert("modelParameters", task.modelParameters);
     return obj;
