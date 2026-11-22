@@ -51,6 +51,16 @@ void applyProxyToManager(QNetworkAccessManager *manager, const QString &proxyTex
     manager->setProxy(proxy);
 }
 
+QStringList parseStringList(const QJsonValue &value) {
+    QStringList strings;
+    for (const QJsonValue &entry : value.toArray()) {
+        if (entry.isString() && !entry.toString().isEmpty())
+            strings.append(entry.toString());
+    }
+    strings.removeDuplicates();
+    return strings;
+}
+
 ModelInfoList parseModelList(const QJsonDocument &doc) {
     ModelInfoList models;
     QSet<QString> seenIds;
@@ -70,6 +80,8 @@ ModelInfoList parseModelList(const QJsonDocument &doc) {
         model.name = object.value("name").toString();
         model.description = object.value("description").toString();
         model.knowledgeCutoff = object.value("knowledge_cutoff").toString();
+        model.supportedParameters = parseStringList(object.value("supported_parameters"));
+        model.reasoningEfforts = parseStringList(object.value("reasoning").toObject().value("supported_efforts"));
 
         const QJsonObject pricing = object.value("pricing").toObject();
         model.promptPrice = pricing.value("prompt").toString();

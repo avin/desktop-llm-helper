@@ -49,6 +49,16 @@
        </property>
       </widget>
      </item>
+     <item>
+      <widget class="QPushButton" name="pushButtonModelParameters">
+       <property name="text">
+        <string>Model Parameters...</string>
+       </property>
+       <property name="toolTip">
+        <string>With the default model, unset parameters are inherited from General Settings.</string>
+       </property>
+      </widget>
+     </item>
     </layout>
    </item>
    <item>

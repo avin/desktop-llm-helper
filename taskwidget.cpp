@@ -8,6 +8,7 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
+#include <QPushButton>
 
 namespace {
 constexpr const char kDefaultModelLabel[] = "Default";
@@ -30,10 +31,17 @@ TaskWidget::TaskWidget(QWidget *parent)
     connect(ui->doubleSpinBoxTemperature, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &TaskWidget::configChanged);
     ui->modelSelectBoxModel->setEmptyLabel(tr(kDefaultModelLabel));
+    ui->pushButtonModelParameters->setEnabled(false);
     connect(ui->modelSelectBoxModel, &ModelSelectBox::currentModelChanged,
-            this, &TaskWidget::configChanged);
+            this, [this]() {
+                selectedModelParameters = QJsonObject();
+                ui->pushButtonModelParameters->setEnabled(!effectiveModelName().isEmpty());
+                emit configChanged();
+            });
     connect(ui->modelSelectBoxModel, &ModelSelectBox::modelsReloadRequested,
             this, &TaskWidget::refreshModelsRequested);
+    connect(ui->pushButtonModelParameters, &QPushButton::clicked,
+            this, &TaskWidget::modelParametersRequested);
 
     ui->horizontalLayoutModel->setStretch(0, 0);
     ui->horizontalLayoutModel->setStretch(1, 1);
@@ -55,6 +63,15 @@ QString TaskWidget::modelName() const {
     return ui->modelSelectBoxModel->currentModel();
 }
 
+QString TaskWidget::effectiveModelName() const {
+    const QString selectedModel = modelName();
+    return selectedModel.isEmpty() ? defaultModelName : selectedModel;
+}
+
+QJsonObject TaskWidget::modelParameters() const {
+    return selectedModelParameters;
+}
+
 bool TaskWidget::insertMode() const {
     return ui->radioInsert->isChecked();
 }
@@ -73,6 +90,23 @@ void TaskWidget::setModelName(const QString &modelName) {
         normalized.clear();
 
     ui->modelSelectBoxModel->setCurrentModel(normalized);
+    ui->pushButtonModelParameters->setEnabled(!effectiveModelName().isEmpty());
+}
+
+void TaskWidget::setDefaultModel(const QString &defaultModel) {
+    if (defaultModelName == defaultModel)
+        return;
+
+    defaultModelName = defaultModel;
+    if (modelName().isEmpty())
+        selectedModelParameters = QJsonObject();
+    ui->modelSelectBoxModel->setEmptyLabel(defaultModelName.isEmpty()
+        ? tr(kDefaultModelLabel) : tr("Default (%1)").arg(defaultModelName));
+    ui->pushButtonModelParameters->setEnabled(!effectiveModelName().isEmpty());
+}
+
+void TaskWidget::setModelParameters(const QJsonObject &parameters) {
+    selectedModelParameters = parameters;
 }
 
 void TaskWidget::setInsertMode(bool insert) {
@@ -114,6 +148,7 @@ TaskDefinition TaskWidget::toDefinition() const {
     def.name = name();
     def.prompt = prompt();
     def.modelName = modelName();
+    def.modelParameters = modelParameters();
     def.insertMode = insertMode();
     def.maxTokens = maxTokens();
     def.temperature = temperature();
@@ -127,6 +162,7 @@ void TaskWidget::applyDefinition(const TaskDefinition &definition) {
     setName(definition.name);
     setPrompt(definition.prompt);
     setModelName(definition.modelName);
+    setModelParameters(definition.modelParameters);
     setInsertMode(definition.insertMode);
     setMaxTokens(definition.maxTokens);
     setTemperature(definition.temperature);

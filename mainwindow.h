@@ -11,6 +11,8 @@
 #include <QPointer>
 #include <QSize>
 
+#include <functional>
+
 #include "hotkeymanager.h"
 #include "configstore.h"
 #include "modelinfo.h"
@@ -61,6 +63,8 @@ signals:
                                 const QString &apiKey, const QString &proxyText);
 
 private:
+    using ModelListCallback = std::function<void(const ModelInfoList &, const QString &)>;
+
     struct ModelListRequestParams {
         QString baseUrl;
         QString apiKey;
@@ -74,9 +78,8 @@ private:
     };
 
     struct PendingModelRequest {
-        QPointer<ModelSelectBox> target;
-        int generation = 0;
         ModelListRequestParams params;
+        ModelListCallback callback;
     };
 
     Ui::MainWindow *ui;
@@ -93,6 +96,7 @@ private:
     bool hasCachedModelList;
     ModelListRequestParams cachedModelListParams;
     ModelInfoList cachedModelList;
+    QJsonObject defaultModelParameters;
 
     void createTrayIcon();
     void loadConfig();
@@ -111,6 +115,8 @@ private:
     void ensureAddTabLast();
     void setDefaultModel(const QString &defaultModel);
     QString currentDefaultModel() const;
+    void loadModelList(ModelListCallback callback);
+    void editModelParameters(TaskWidget *task);
     QString suggestedSettingsPath() const;
 };
 

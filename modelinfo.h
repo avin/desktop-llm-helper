@@ -2,6 +2,7 @@
 #define MODELINFO_H
 
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QMetaType>
 
@@ -13,6 +14,8 @@ struct ModelInfo {
     QString completionPrice;
     QString inputCacheReadPrice;
     QString knowledgeCutoff;
+    QStringList supportedParameters;
+    QStringList reasoningEfforts;
 };
 
 using ModelInfoList = QVector<ModelInfo>;

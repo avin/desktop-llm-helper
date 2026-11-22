@@ -18,11 +18,30 @@ QString normalizeModelName(const QString &value) {
     return value;
 }
 
+QJsonObject modelParametersFromJson(const QJsonObject &obj) {
+    QJsonObject parameters;
+
+    const QJsonObject saved = obj.value("modelParameters").toObject();
+    const QJsonValue effort = saved.value("reasoning").toObject().value("effort");
+    if (effort.isString())
+        parameters.insert("reasoning", QJsonObject{{"effort", effort}});
+    else if (saved.value("reasoning_effort").isString())
+        parameters.insert("reasoning_effort", saved.value("reasoning_effort"));
+    if (saved.value("verbosity").isString())
+        parameters.insert("verbosity", saved.value("verbosity"));
+    for (const auto *key : {"top_p", "top_k"}) {
+        if (saved.value(key).isDouble())
+            parameters.insert(key, saved.value(key));
+    }
+    return parameters;
+}
+
 TaskDefinition taskFromJson(const QJsonObject &obj) {
     TaskDefinition task;
     task.name = obj.value("name").toString();
     task.prompt = obj.value("prompt").toString();
     task.modelName = normalizeModelName(obj.value("modelName").toString());
+    task.modelParameters = modelParametersFromJson(obj);
     task.insertMode = obj.value("insert").toBool(true);
     task.maxTokens = obj.value("maxTokens").toInt(300);
     task.temperature = obj.value("temperature").toDouble(0.5);
@@ -47,6 +66,8 @@ QJsonObject taskToJson(const TaskDefinition &task) {
     };
     if (!task.modelName.isEmpty())
         obj.insert("modelName", task.modelName);
+    if (!task.modelParameters.isEmpty())
+        obj.insert("modelParameters", task.modelParameters);
     return obj;
 }
 } // namespace
@@ -91,6 +112,8 @@ AppConfig ConfigStore::fromJson(const QJsonDocument &doc, bool *ok) {
 
     config.settings.apiEndpoint = settings.value("apiEndpoint").toString();
     config.settings.modelName = normalizeModelName(settings.value("modelName").toString());
+    if (!config.settings.modelName.isEmpty())
+        config.settings.modelParameters = modelParametersFromJson(settings);
     config.settings.apiKey = settings.value("apiKey").toString();
     config.settings.proxy = settings.value("proxy").toString();
     config.settings.hotkey = settings.value("hotkey").toString();
@@ -116,6 +139,8 @@ QJsonDocument ConfigStore::toJson(const AppConfig &config) {
         {"hotkey", config.settings.hotkey},
         {"maxChars", config.settings.maxChars}
     };
+    if (!config.settings.modelParameters.isEmpty())
+        settings.insert("modelParameters", config.settings.modelParameters);
 
     QJsonArray tasksArray;
     for (const TaskDefinition &task : config.tasks)

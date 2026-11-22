@@ -786,12 +786,20 @@ void TaskWindow::sendRequestWithHistory(const TaskDefinition &task) {
         messagesArray.append(item);
     }
 
+    const QString taskModel = normalizeModelName(task.modelName);
+    const QString modelName = taskModel.isEmpty() ? normalizeModelName(settings.modelName) : taskModel;
     QJsonObject body;
-    const QString modelName = task.modelName.isEmpty()
-        ? normalizeModelName(settings.modelName)
-        : normalizeModelName(task.modelName);
-    if (!modelName.isEmpty())
+    if (!modelName.isEmpty()) {
+        if (taskModel.isEmpty())
+            body = settings.modelParameters;
+        if (task.modelParameters.contains("reasoning"))
+            body.remove("reasoning_effort");
+        else if (task.modelParameters.contains("reasoning_effort"))
+            body.remove("reasoning");
+        for (auto it = task.modelParameters.constBegin(); it != task.modelParameters.constEnd(); ++it)
+            body.insert(it.key(), it.value());
         body["model"] = modelName;
+    }
     body["messages"] = messagesArray;
     body["max_tokens"] = task.maxTokens;
     body["temperature"] = task.temperature;

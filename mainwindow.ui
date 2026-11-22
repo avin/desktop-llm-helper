@@ -88,6 +88,13 @@
           <item>
            <widget class="ModelSelectBox" name="modelSelectBoxModelName"/>
           </item>
+          <item>
+           <widget class="QPushButton" name="pushButtonModelParameters">
+            <property name="text">
+             <string>Model Parameters...</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </item>
         <item row="3" column="0">

@@ -12,6 +12,13 @@
 #include <QJsonDocument>
 #include <QCoreApplication>
 #include <QLineEdit>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QLabel>
+#include <QLocale>
+#include <QValidator>
 #include <QMetaObject>
 #include <QTabBar>
 #include <QTabWidget>
@@ -32,6 +39,7 @@
 #include <QThread>
 
 #include <functional>
+#include <limits>
 
 #include <windows.h>
 
@@ -404,6 +412,7 @@ MainWindow::MainWindow(QWidget *parent)
     // Include application name in the window title
     setWindowTitle(QCoreApplication::applicationName() + " - " + tr("Settings"));
     ui->modelSelectBoxModelName->setEmptyLabel(tr("Not selected"));
+    ui->pushButtonModelParameters->setEnabled(false);
 
     auto *oldTabs = ui->tasksTabWidget;
     auto *newTabs = new TaskTabWidget(ui->tab_2);
@@ -430,9 +439,29 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::handleTaskTabClicked);
     ensureAddTab();
 
-    connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
+    connect(ui->lineEditApiEndpoint, &QLineEdit::textChanged, this, [this]() {
+        if (loadingConfig)
+            return;
+        defaultModelParameters = QJsonObject();
+        for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
+            if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i)))
+                task->setModelParameters(QJsonObject());
+        }
+        saveConfig();
+    });
     connect(ui->modelSelectBoxModelName, &ModelSelectBox::currentModelChanged,
-            this, &MainWindow::saveConfig);
+            this, [this](const QString &modelId) {
+                defaultModelParameters = QJsonObject();
+                ui->pushButtonModelParameters->setEnabled(!modelId.isEmpty());
+                for (int i = 0; i < ui->tasksTabWidget->count(); ++i) {
+                    if (auto *task = qobject_cast<TaskWidget *>(ui->tasksTabWidget->widget(i)))
+                        task->setDefaultModel(modelId);
+                }
+                saveConfig();
+            });
+    connect(ui->pushButtonModelParameters, &QPushButton::clicked, this, [this]() {
+        editModelParameters(nullptr);
+    });
     connect(ui->lineEditApiKey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditProxy, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditHotkey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
@@ -652,6 +681,7 @@ void MainWindow::applyConfig(const AppConfig &config) {
     ui->lineEditHotkey->setText(config.settings.hotkey);
     ui->lineEditMaxChars->setText(QString::number(config.settings.maxChars));
     setDefaultModel(config.settings.modelName);
+    defaultModelParameters = config.settings.modelParameters;
 
     clearTasks();
     for (const TaskDefinition &task : config.tasks)
@@ -667,6 +697,7 @@ AppConfig MainWindow::buildConfigFromUi() const {
     AppConfig config;
     config.settings.apiEndpoint = ui->lineEditApiEndpoint->text();
     config.settings.modelName = currentDefaultModel();
+    config.settings.modelParameters = defaultModelParameters;
     config.settings.apiKey = ui->lineEditApiKey->text();
     config.settings.proxy = ui->lineEditProxy->text();
     config.settings.hotkey = ui->lineEditHotkey->text();
@@ -688,6 +719,7 @@ QList<TaskDefinition> MainWindow::currentTaskDefinitions() const {
 
 void MainWindow::addTaskTab(const TaskDefinition &definition, bool makeCurrent) {
     auto *task = new TaskWidget;
+    task->setDefaultModel(currentDefaultModel());
     task->applyDefinition(definition);
     connectTaskSignals(task);
 
@@ -707,6 +739,9 @@ void MainWindow::connectTaskSignals(TaskWidget *task) {
     });
     connect(task, &TaskWidget::refreshModelsRequested,
             this, &MainWindow::requestModelList);
+    connect(task, &TaskWidget::modelParametersRequested, this, [this, task]() {
+        editModelParameters(task);
+    });
 }
 
 void MainWindow::updateTaskTabTitle(TaskWidget *task) {
@@ -774,13 +809,22 @@ void MainWindow::setDefaultModel(const QString &defaultModel) {
     if (normalized == QLatin1String(kDefaultModelLabel))
         normalized.clear();
     ui->modelSelectBoxModelName->setCurrentModel(normalized);
+    ui->pushButtonModelParameters->setEnabled(!normalized.isEmpty());
 }
 
 void MainWindow::requestModelList(ModelSelectBox *target, int generation) {
     QPointer<ModelSelectBox> targetSelector(target);
-    if (!targetSelector)
-        return;
+    loadModelList([targetSelector, generation](const ModelInfoList &models, const QString &error) {
+        if (!targetSelector || targetSelector->currentReloadGeneration() != generation)
+            return;
+        if (error.isEmpty())
+            targetSelector->setModels(models);
+        else
+            targetSelector->setLoadError(error);
+    });
+}
 
+void MainWindow::loadModelList(ModelListCallback callback) {
     const ModelListRequestParams params{
         ui->lineEditApiEndpoint->text().trimmed(),
         ui->lineEditApiKey->text().trimmed(),
@@ -788,12 +832,12 @@ void MainWindow::requestModelList(ModelSelectBox *target, int generation) {
     };
 
     if (hasCachedModelList && cachedModelListParams == params) {
-        targetSelector->setModels(cachedModelList);
+        callback(cachedModelList, QString());
         return;
     }
 
     const int requestId = ++nextModelRequestId;
-    pendingModelRequests.insert(requestId, PendingModelRequest{targetSelector, generation, params});
+    pendingModelRequests.insert(requestId, PendingModelRequest{params, std::move(callback)});
     emit modelListLoadRequested(requestId, params.baseUrl, params.apiKey, params.proxyText);
 }
 
@@ -806,10 +850,7 @@ void MainWindow::handleModelListLoaded(int requestId, const ModelInfoList &model
     cachedModelListParams = request.params;
     cachedModelList = models;
 
-    if (!request.target || request.target->currentReloadGeneration() != request.generation)
-        return;
-
-    request.target->setModels(models);
+    request.callback(models, QString());
 }
 
 void MainWindow::handleModelListFailed(int requestId, const QString &message) {
@@ -817,10 +858,165 @@ void MainWindow::handleModelListFailed(int requestId, const QString &message) {
         return;
 
     const PendingModelRequest request = pendingModelRequests.take(requestId);
-    if (!request.target || request.target->currentReloadGeneration() != request.generation)
+    request.callback(ModelInfoList(), message);
+}
+
+void MainWindow::editModelParameters(TaskWidget *task) {
+    const QString modelId = task ? task->effectiveModelName() : currentDefaultModel();
+    if (modelId.isEmpty())
         return;
 
-    request.target->setLoadError(message);
+    const QJsonObject saved = task ? task->modelParameters() : defaultModelParameters;
+    const bool inherits = task && task->modelName().isEmpty();
+    const QJsonObject inherited = inherits ? defaultModelParameters : QJsonObject();
+    auto *dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Model Parameters"));
+    auto *layout = new QFormLayout(dialog);
+    auto *status = new QLabel(tr("Loading model parameters..."), dialog);
+    status->setTextFormat(Qt::PlainText);
+    status->setWordWrap(true);
+    layout->addRow(status);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
+    auto *ok = buttons->button(QDialogButtonBox::Ok);
+    ok->setEnabled(false);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    dialog->open();
+
+    loadModelList([this, dialog = QPointer<QDialog>(dialog), layout, status, buttons, ok,
+                   modelId, saved, inherits, inherited,
+                   task = QPointer<TaskWidget>(task), taskScope = task != nullptr]
+                  (const ModelInfoList &models, const QString &error) {
+        if (!dialog)
+            return;
+        if (!error.isEmpty()) {
+            status->setText(error);
+            return;
+        }
+
+        ModelInfo model;
+        for (const ModelInfo &entry : models) {
+            if (entry.id == modelId) {
+                model = entry;
+                break;
+            }
+        }
+
+        int row = 1;
+        auto unsetLabel = [&](const QString &value) {
+            if (!inherits)
+                return tr("Provider default");
+            return value.isEmpty() ? tr("Inherit from General Settings") : tr("Inherit (%1)").arg(value);
+        };
+        auto addChoice = [&](const QString &label, const QStringList &values,
+                             const QString &value, const QString &inheritedValue) {
+            auto *choice = new QComboBox(dialog);
+            choice->addItem(unsetLabel(inheritedValue));
+            choice->addItems(values);
+            choice->setCurrentIndex(qMax(0, choice->findText(value)));
+            layout->insertRow(row++, label, choice);
+            return choice;
+        };
+
+        QComboBox *effort = nullptr;
+        const bool useReasoningObject = model.supportedParameters.contains("reasoning");
+        if (!model.reasoningEfforts.isEmpty()
+            && (useReasoningObject || model.supportedParameters.contains("reasoning_effort"))) {
+            auto reasoningEffort = [](const QJsonObject &parameters) {
+                return parameters.contains("reasoning")
+                    ? parameters.value("reasoning").toObject().value("effort").toString()
+                    : parameters.value("reasoning_effort").toString();
+            };
+            effort = addChoice(tr("Reasoning effort"), model.reasoningEfforts,
+                               reasoningEffort(saved), reasoningEffort(inherited));
+        }
+
+        QComboBox *verbosity = nullptr;
+        if (model.supportedParameters.contains("verbosity")) {
+            verbosity = addChoice(tr("Verbosity"), {"low", "medium", "high"},
+                                  saved.value("verbosity").toString(), inherited.value("verbosity").toString());
+        }
+
+        QHash<QString, QLineEdit *> numbers;
+        for (const QString &key : {QStringLiteral("top_p"), QStringLiteral("top_k")}) {
+            if (!model.supportedParameters.contains(key))
+                continue;
+            auto *edit = new QLineEdit(dialog);
+            const bool isTopP = key == QLatin1String("top_p");
+            QValidator *validator;
+            if (isTopP) {
+                auto *decimal = new QDoubleValidator(0.0, 1.0, 6, edit);
+                decimal->setNotation(QDoubleValidator::StandardNotation);
+                validator = decimal;
+            } else {
+                validator = new QIntValidator(0, std::numeric_limits<int>::max(), edit);
+            }
+            QLocale locale = QLocale::c();
+            locale.setNumberOptions(QLocale::RejectGroupSeparator);
+            validator->setLocale(locale);
+            edit->setValidator(validator);
+            const QJsonValue inheritedValue = inherited.value(key);
+            edit->setPlaceholderText(unsetLabel(inheritedValue.isDouble()
+                ? QString::number(inheritedValue.toDouble()) : QString()));
+            const QJsonValue value = saved.value(key);
+            if (value.isDouble())
+                edit->setText(isTopP ? QString::number(value.toDouble(), 'f', 6)
+                                    : QString::number(value.toInt()));
+            layout->insertRow(row++, isTopP ? tr("Top P") : tr("Top K"), edit);
+            numbers.insert(key, edit);
+        }
+
+        if (row == 1) {
+            status->setText(saved.isEmpty()
+                ? tr("The provider catalog lists no configurable parameters for this model.")
+                : tr("The provider catalog lists no configurable parameters for this model. "
+                     "Click OK to clear the saved parameters."));
+            ok->setEnabled(!saved.isEmpty());
+        } else {
+            status->hide();
+            layout->removeWidget(status);
+            auto updateOk = [ok, numbers]() {
+                for (const auto *edit : numbers) {
+                    if (!edit->text().isEmpty() && !edit->hasAcceptableInput()) {
+                        ok->setEnabled(false);
+                        return;
+                    }
+                }
+                ok->setEnabled(true);
+            };
+            for (auto *edit : numbers)
+                connect(edit, &QLineEdit::textChanged, dialog, updateOk);
+            updateOk();
+        }
+        connect(buttons, &QDialogButtonBox::accepted, dialog,
+                [this, dialog, effort, verbosity, useReasoningObject, numbers, task, taskScope]() {
+            if (taskScope && !task) {
+                dialog->reject();
+                return;
+            }
+            QJsonObject parameters;
+            if (effort && effort->currentIndex() > 0) {
+                const QString value = effort->currentText();
+                if (useReasoningObject)
+                    parameters.insert("reasoning", QJsonObject{{"effort", value}});
+                else
+                    parameters.insert("reasoning_effort", value);
+            }
+            if (verbosity && verbosity->currentIndex() > 0)
+                parameters.insert("verbosity", verbosity->currentText());
+            for (auto it = numbers.cbegin(); it != numbers.cend(); ++it) {
+                if (!it.value()->text().isEmpty())
+                    parameters.insert(it.key(), it.value()->text().toDouble());
+            }
+            if (task)
+                task->setModelParameters(parameters);
+            else
+                defaultModelParameters = parameters;
+            saveConfig();
+            dialog->accept();
+        });
+    });
 }
 
 void MainWindow::handleGlobalHotkey() {

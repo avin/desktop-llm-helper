@@ -2,6 +2,7 @@
 #define CONFIGSTORE_H
 
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QList>
 #include <QString>
 
@@ -12,6 +13,7 @@ struct AppSettings {
     QString proxy;
     QString hotkey;
     int maxChars = 0;
+    QJsonObject modelParameters;
 };
 
 struct TaskDefinition {
@@ -24,6 +26,7 @@ struct TaskDefinition {
     int responseWidth = 600;
     int responseHeight = 200;
     int responseZoom = 0;
+    QJsonObject modelParameters;
 };
 
 struct AppConfig {
