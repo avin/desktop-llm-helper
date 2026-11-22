@@ -825,7 +825,6 @@ void TaskWindow::sendFollowUpMessage() {
     appendMessageToHistory("user", sendText);
     appendTranscriptBlock(formatUserMessageBlock(sendText));
     followUpInput->clear();
-    updateResponseView();
 
     showReplyIndicator();
     sendRequestWithHistory(tasks.at(activeTaskIndex));
@@ -849,8 +848,6 @@ void TaskWindow::handleRequestReadyRead(int requestId, const QByteArray &chunk) 
         streamBuffer.remove(0, lineEnd + 1);
         const QString delta = parseStreamDelta(line);
         if (!delta.isEmpty()) {
-            if (!activeRequestTask.insertMode)
-                hideReplyIndicator();
             pendingResponseText += delta;
             appended = true;
         }
@@ -863,8 +860,10 @@ void TaskWindow::handleRequestReadyRead(int requestId, const QByteArray &chunk) 
             ensureResponseWindow();
     }
 
-    if (appended && !activeRequestTask.insertMode)
+    if (appended && !activeRequestTask.insertMode) {
+        hideReplyIndicator();
         updateResponseView();
+    }
 }
 
 void TaskWindow::handleRequestFinished(int requestId,
@@ -903,6 +902,8 @@ void TaskWindow::handleRequestFinished(int requestId,
             clearOriginalClipboardSnapshot();
             return;
         }
+        if (!activeRequestTask.insertMode)
+            updateResponseView();
         QMessageBox::critical(this,
                               tr("Error"),
                               tr("LLM request failed (%1): HTTP status %2")
@@ -995,6 +996,15 @@ void TaskWindow::ensureResponseWindow() {
     });
     lay->addWidget(view);
     if (QScrollBar *responseBar = view->verticalScrollBar()) {
+        connect(responseBar, &QScrollBar::actionTriggered, this, [this, view, responseBar]() {
+            // The slider position changes before the viewport scrolls.
+            const int delta = responseBar->sliderPosition() - responseBar->value();
+            if (delta == 0)
+                return;
+            const QTextCursor cursor = view->cursorForPosition(QPoint(0, delta));
+            responseScrollPosition = cursor.position();
+            responseScrollOffset = view->cursorRect(cursor).top() - delta;
+        });
         connect(responseBar, &QScrollBar::sliderPressed, this, [this]() {
             responseScrollDragActive = true;
         });
@@ -1100,29 +1110,20 @@ void TaskWindow::updateResponseView() {
     if (!responseView)
         return;
     QScrollBar *bar = responseView->verticalScrollBar();
-    if (responseScrollDragActive || (bar && bar->isSliderDown())) {
+    if (responseScrollDragActive || bar->isSliderDown()) {
         pendingResponseViewUpdate = true;
         return;
     }
     pendingResponseViewUpdate = false;
-    const int prevValue = bar ? bar->value() : 0;
-    const int prevMax = bar ? bar->maximum() : 0;
-    const bool atBottom = bar && (prevMax <= 0 || prevValue >= (prevMax - 2));
+    QTextDocument *doc = responseView->document();
     const QString displayText = buildDisplayMarkdown();
-    responseView->document()->setMarkdown(displayText, QTextDocument::MarkdownDialectGitHub);
+    doc->setMarkdown(displayText, QTextDocument::MarkdownDialectGitHub);
     applyMarkdownStyles();
-    if (!bar)
-        return;
-    if (atBottom) {
-        bar->setValue(bar->maximum());
-        return;
-    }
-    if (prevMax > 0) {
-        const int mappedValue = static_cast<int>((static_cast<qint64>(prevValue) * bar->maximum()) / prevMax);
-        bar->setValue(mappedValue);
-    } else {
-        bar->setValue(prevValue);
-    }
+
+    QTextCursor anchor(doc);
+    anchor.setPosition(qMin(responseScrollPosition, doc->characterCount() - 1));
+    const int anchorTop = responseView->cursorRect(anchor).top();
+    bar->setValue(bar->value() + anchorTop - responseScrollOffset);
 }
 
 void TaskWindow::applyMarkdownStyles() {
@@ -1771,6 +1772,15 @@ void TaskWindow::hideLoadingIndicator() {
 }
 
 void TaskWindow::showReplyIndicator() {
+    responseScrollPosition = 0;
+    responseScrollOffset = qRound(responseView->document()->documentMargin());
+    if (!transcriptText.isEmpty()) {
+        // Follow-ups end in a horizontal rule. The answer starts in the next block.
+        QTextDocument transcript;
+        transcript.setMarkdown(transcriptText, QTextDocument::MarkdownDialectGitHub);
+        responseScrollPosition = transcript.characterCount();
+    }
+
     replyIndicatorVisible = true;
     replyDotCount = 3;
     if (!replyIndicatorTimer) {
@@ -1789,10 +1799,7 @@ void TaskWindow::hideReplyIndicator() {
         replyIndicatorTimer->deleteLater();
         replyIndicatorTimer = nullptr;
     }
-    if (!replyIndicatorVisible)
-        return;
     replyIndicatorVisible = false;
-    updateResponseView();
 }
 
 void TaskWindow::updateLoadingPosition() {

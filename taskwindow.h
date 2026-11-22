@@ -114,6 +114,8 @@ private:
     bool requestInFlight;
     bool responseScrollDragActive;
     bool pendingResponseViewUpdate;
+    int responseScrollPosition = 0;
+    int responseScrollOffset = 0;
     bool replyIndicatorVisible;
     bool originalClipboardWasEmpty;
     QList<QPushButton *> menuButtons;
