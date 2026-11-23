@@ -112,7 +112,7 @@ private:
     QPointer<QPushButton> actionButton;
     QByteArray responseBody;
     QByteArray streamBuffer;
-    QString transcriptText;
+    QList<ChatMessage> transcript;
     QString pendingResponseText;
     QList<ChatMessage> messageHistory;
     int currentRequestId;
@@ -121,6 +121,7 @@ private:
     bool capturingSelection = false;
     bool responseScrollDragActive;
     bool pendingResponseViewUpdate;
+    bool anchorNextResponse = false;
     int responseScrollPosition = 0;
     int responseScrollOffset = 0;
     bool replyIndicatorVisible;
@@ -158,7 +159,7 @@ private:
     void appendTranscriptBlock(const QString &markdown);
     QString normalizeMarkdownBlock(const QString &markdown) const;
     QString formatUserMessageBlock(const QString &text) const;
-    QString buildDisplayMarkdown() const;
+    QString buildPendingReplyMarkdown() const;
     QString extractResponseTextFromJson(const QByteArray &data) const;
     void resetRequestState();
     void resetConversationState();

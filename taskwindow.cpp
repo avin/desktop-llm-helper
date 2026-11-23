@@ -26,6 +26,8 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QPalette>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -42,6 +44,7 @@
 #include <QTextFormat>
 #include <QTextCursor>
 #include <QTextFragment>
+#include <QTextFrame>
 #include <QTextLayout>
 #include <QThread>
 #include <QTimer>
@@ -218,7 +221,55 @@ public:
         zoomDeltaCallback = std::move(callback);
     }
 
+    void insertUserMessage(QTextCursor &cursor, const QString &markdown) {
+        QTextFrameFormat format;
+        format.setProperty(UserMessageFrame, true);
+        format.setLeftMargin(userMessageLeftMargin());
+        format.setTopMargin(userMessageSpacing);
+        format.setBottomMargin(userMessageSpacing);
+        format.setPadding(12);
+        QTextFrame *frame = cursor.insertFrame(format);
+        cursor = frame->firstCursorPosition();
+        cursor.insertMarkdown(markdown, QTextDocument::MarkdownDialectGitHub);
+        cursor.movePosition(QTextCursor::End);
+    }
+
 protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QTextBrowser::resizeEvent(event);
+        const qreal leftMargin = userMessageLeftMargin();
+        for (QTextFrame *frame : document()->rootFrame()->childFrames()) {
+            QTextFrameFormat format = frame->frameFormat();
+            if (format.boolProperty(UserMessageFrame) && format.leftMargin() != leftMargin) {
+                format.setLeftMargin(leftMargin);
+                frame->setFrameFormat(format);
+            }
+        }
+    }
+
+    void paintEvent(QPaintEvent *event) override {
+        {
+            QPainter painter(viewport());
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor("#e9eef5"));
+            const QScrollBar *horizontalBar = horizontalScrollBar();
+            const int scrollX = isRightToLeft() ? horizontalBar->maximum() - horizontalBar->value()
+                                                : horizontalBar->value();
+            for (QTextFrame *frame : document()->rootFrame()->childFrames()) {
+                const QTextFrameFormat format = frame->frameFormat();
+                if (!format.boolProperty(UserMessageFrame))
+                    continue;
+                QRectF rect = document()->documentLayout()->frameBoundingRect(frame);
+                rect.adjust(format.leftMargin(), userMessageSpacing, 0, -userMessageSpacing);
+                rect.translate(-scrollX, -verticalScrollBar()->value());
+                if (rect.intersects(event->rect()))
+                    painter.drawRoundedRect(rect, 12, 12);
+            }
+        }
+        QTextBrowser::paintEvent(event);
+    }
+
     void wheelEvent(QWheelEvent *event) override {
         if (event->modifiers().testFlag(Qt::ControlModifier)) {
             int delta = event->angleDelta().y();
@@ -249,6 +300,13 @@ protected:
     }
 
 private:
+    static constexpr int UserMessageFrame = QTextFormat::UserProperty;
+    static constexpr qreal userMessageSpacing = 8;
+
+    qreal userMessageLeftMargin() const {
+        return (viewport()->width() - 2 * document()->documentMargin()) * 0.25;
+    }
+
     std::function<void()> zoomCallback;
     std::function<void(int)> zoomDeltaCallback;
 };
@@ -813,7 +871,7 @@ void TaskWindow::sendFollowUpMessage() {
 
     const QString sendText = applyCharLimit(trimmed);
     appendMessageToHistory("user", sendText);
-    appendTranscriptBlock(formatUserMessageBlock(sendText));
+    transcript.append({QStringLiteral("user"), sendText});
     followUpInput->clear();
 
     showReplyIndicator();
@@ -997,6 +1055,7 @@ void TaskWindow::ensureResponseWindow() {
             if (delta == 0)
                 return;
             const QTextCursor cursor = view->cursorForPosition(QPoint(0, delta));
+            anchorNextResponse = false;
             responseScrollPosition = cursor.position();
             responseScrollOffset = view->cursorRect(cursor).top() - delta;
         });
@@ -1110,9 +1169,24 @@ void TaskWindow::updateResponseView() {
         return;
     }
     pendingResponseViewUpdate = false;
-    QTextDocument *doc = responseView->document();
-    const QString displayText = buildDisplayMarkdown();
-    doc->setMarkdown(displayText, QTextDocument::MarkdownDialectGitHub);
+    auto *view = static_cast<MarkdownTextBrowser *>(responseView.data());
+    QTextDocument *doc = view->document();
+    doc->clear();
+    QTextCursor cursor(doc);
+    cursor.beginEditBlock();
+    for (const ChatMessage &message : transcript) {
+        if (message.role == QLatin1String("user")) {
+            view->insertUserMessage(cursor, formatUserMessageBlock(message.content));
+        } else {
+            cursor.insertMarkdown(message.content, QTextDocument::MarkdownDialectGitHub);
+        }
+    }
+    if (anchorNextResponse) {
+        responseScrollPosition = cursor.position();
+        anchorNextResponse = false;
+    }
+    cursor.insertMarkdown(buildPendingReplyMarkdown(), QTextDocument::MarkdownDialectGitHub);
+    cursor.endEditBlock();
     applyMarkdownStyles();
 
     QTextCursor anchor(doc);
@@ -1233,9 +1307,7 @@ void TaskWindow::appendTranscriptBlock(const QString &markdown) {
     const QString normalized = normalizeMarkdownBlock(markdown);
     if (normalized.trimmed().isEmpty())
         return;
-    if (!transcriptText.isEmpty() && !transcriptText.endsWith("\n\n"))
-        transcriptText += "\n\n";
-    transcriptText += normalized;
+    transcript.append({QStringLiteral("assistant"), normalized});
 }
 
 QString TaskWindow::normalizeMarkdownBlock(const QString &markdown) const {
@@ -1261,23 +1333,11 @@ QString TaskWindow::formatUserMessageBlock(const QString &text) const {
     QString normalized = text;
     normalized.replace("\r\n", "\n");
     normalized.replace("\r", "\n");
-    const QStringList lines = normalized.split('\n');
-
-    QString block = "---\n";
-    block += "> **You**: \n";
-    for (const QString &line : lines)
-        block += "> " + line + "  \n";
-    block += "\n---";
-    return block;
+    return normalized.replace("\n", "  \n");
 }
 
-QString TaskWindow::buildDisplayMarkdown() const {
-    QString displayText = transcriptText;
-    if (!pendingResponseText.isEmpty()) {
-        if (!displayText.isEmpty() && !displayText.endsWith("\n\n"))
-            displayText += "\n\n";
-        displayText += pendingResponseText;
-    }
+QString TaskWindow::buildPendingReplyMarkdown() const {
+    QString displayText = pendingResponseText;
     if (replyIndicatorVisible) {
         if (!displayText.isEmpty() && !displayText.endsWith("\n\n"))
             displayText += "\n\n";
@@ -1315,10 +1375,11 @@ void TaskWindow::resetRequestState() {
 void TaskWindow::resetConversationState() {
     hideReplyIndicator();
     messageHistory.clear();
-    transcriptText.clear();
+    transcript.clear();
     pendingResponseText.clear();
     responseScrollDragActive = false;
     pendingResponseViewUpdate = false;
+    anchorNextResponse = false;
     resetRequestState();
     setRequestInFlight(false);
     if (followUpInput)
@@ -1769,14 +1830,8 @@ void TaskWindow::hideLoadingIndicator() {
 }
 
 void TaskWindow::showReplyIndicator() {
-    responseScrollPosition = 0;
+    anchorNextResponse = true;
     responseScrollOffset = qRound(responseView->document()->documentMargin());
-    if (!transcriptText.isEmpty()) {
-        // Follow-ups end in a horizontal rule. The answer starts in the next block.
-        QTextDocument transcript;
-        transcript.setMarkdown(transcriptText, QTextDocument::MarkdownDialectGitHub);
-        responseScrollPosition = transcript.characterCount();
-    }
 
     replyIndicatorVisible = true;
     replyDotCount = 3;
