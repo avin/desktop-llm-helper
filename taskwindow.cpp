@@ -184,44 +184,6 @@ bool isCodeBlock(const QTextBlock &block) {
     return block.charFormat().fontFixedPitch();
 }
 
-bool isInlineCodeFormat(const QTextCharFormat &format) {
-    if (format.fontFixedPitch())
-        return true;
-    const QFont font = format.font();
-    if (font.fixedPitch())
-        return true;
-    const QString family = font.family();
-    if (family.contains("mono", Qt::CaseInsensitive)
-        || family.contains("courier", Qt::CaseInsensitive)
-        || family.contains("consolas", Qt::CaseInsensitive)) {
-        return true;
-    }
-    const QStringList families = format.fontFamilies().toStringList();
-    for (const QString &entry : families) {
-        if (entry.contains("mono", Qt::CaseInsensitive)
-            || entry.contains("courier", Qt::CaseInsensitive)
-            || entry.contains("consolas", Qt::CaseInsensitive)) {
-            return true;
-        }
-    }
-    const QVariant hintProp = format.property(QTextFormat::FontStyleHint);
-    if (hintProp.isValid()) {
-        const int hint = hintProp.toInt();
-        if (hint == QFont::TypeWriter || hint == QFont::Monospace)
-            return true;
-    }
-    const QVariant familyProp = format.property(QTextFormat::FontFamily);
-    if (familyProp.isValid()) {
-        const QString propFamily = familyProp.toString();
-        if (propFamily.contains("mono", Qt::CaseInsensitive)
-            || propFamily.contains("courier", Qt::CaseInsensitive)
-            || propFamily.contains("consolas", Qt::CaseInsensitive)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 QFont resolveBaseTextFont(QTextDocument *doc) {
     if (!doc)
         return QFont();
@@ -233,7 +195,7 @@ QFont resolveBaseTextFont(QTextDocument *doc) {
             if (!fragment.isValid())
                 continue;
             const QTextCharFormat format = fragment.charFormat();
-            if (isInlineCodeFormat(format))
+            if (format.fontFixedPitch())
                 continue;
             const QFont font = format.font();
             if (font.pointSizeF() > 0 || font.pixelSize() > 0)
@@ -428,8 +390,6 @@ void moveNearCursor(QWidget *widget, const QPoint &cursorPos) {
 const QString &markdownCss() {
     static const QString css =
         "body {"
-        "  font-family: 'Segoe UI', 'Noto Sans', Helvetica, Arial;"
-        "  font-size: 12pt;"
         "  color: #24292f;"
         "}"
         "a { color: #0969da; text-decoration: none; }"
@@ -1014,10 +974,9 @@ void TaskWindow::ensureResponseWindow() {
     auto *view = new MarkdownTextBrowser(responseWindow);
     responseView = view;
     QFont font = responseView->font();
-    font.setFamilies(QStringList{"Segoe UI", "Noto Sans", "Helvetica", "Arial"});
-    font.setPointSize(12);
-    responseView->setFont(font);
+    font.setPointSize(ChatFonts::pointSize);
     responseView->document()->setDefaultFont(font);
+    applyChatMessageFont();
     responseView->setReadOnly(true);
     responseView->setOpenExternalLinks(true);
     responseView->document()->setDefaultStyleSheet(markdownCss());
@@ -1162,6 +1121,22 @@ void TaskWindow::updateResponseView() {
     bar->setValue(bar->value() + anchorTop - responseScrollOffset);
 }
 
+void TaskWindow::setChatFonts(const ChatFonts &fonts) {
+    settings.chatFonts = fonts;
+    if (responseView) {
+        applyChatMessageFont();
+        applyMarkdownStyles();
+    }
+}
+
+void TaskWindow::applyChatMessageFont() {
+    QTextDocument *doc = responseView->document();
+    QFont font = doc->defaultFont();
+    font.setFamilies({settings.chatFonts.messageFamily, "Noto Sans", "Helvetica", "Arial"});
+    responseView->setFont(font);
+    doc->setDefaultFont(font);
+}
+
 void TaskWindow::applyMarkdownStyles() {
     if (!responseView)
         return;
@@ -1171,7 +1146,7 @@ void TaskWindow::applyMarkdownStyles() {
 
     const qreal codeBlockMargin = 8.0;
     QTextCharFormat inlineCodeFormat;
-    inlineCodeFormat.setFontFamilies(QStringList{"Consolas"});
+    inlineCodeFormat.setFontFamilies({settings.chatFonts.codeFamily});
     inlineCodeFormat.setFontFixedPitch(true);
     inlineCodeFormat.setBackground(QColor("#f6f8fa"));
     const QFont baseFont = resolveBaseTextFont(doc);
@@ -1180,8 +1155,6 @@ void TaskWindow::applyMarkdownStyles() {
     } else if (baseFont.pixelSize() > 0) {
         inlineCodeFormat.setProperty(QTextFormat::FontPixelSize, baseFont.pixelSize());
     }
-
-    QTextCharFormat blockCodeCharFormat = inlineCodeFormat;
 
     for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
         if (isCodeBlock(block)) {
@@ -1196,8 +1169,8 @@ void TaskWindow::applyMarkdownStyles() {
             blockFormat.setBottomMargin(isLastBlock ? codeBlockMargin : 0.0);
             blockCursor.setBlockFormat(blockFormat);
 
-            blockCursor.select(QTextCursor::BlockUnderCursor);
-            blockCursor.mergeCharFormat(blockCodeCharFormat);
+            blockCursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+            blockCursor.mergeCharFormat(inlineCodeFormat);
             continue;
         }
 
@@ -1205,7 +1178,7 @@ void TaskWindow::applyMarkdownStyles() {
             const QTextFragment fragment = it.fragment();
             if (!fragment.isValid())
                 continue;
-            if (!isInlineCodeFormat(fragment.charFormat()))
+            if (!fragment.charFormat().fontFixedPitch())
                 continue;
             QTextCursor cursor(doc);
             cursor.setPosition(fragment.position());

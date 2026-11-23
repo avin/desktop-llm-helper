@@ -123,6 +123,9 @@ AppConfig ConfigStore::fromJson(const QJsonDocument &doc, bool *ok) {
     config.settings.proxy = settings.value("proxy").toString();
     config.settings.hotkey = settings.value("hotkey").toString();
     config.settings.maxChars = settings.value("maxChars").toInt();
+    auto &fonts = config.settings.chatFonts;
+    fonts.messageFamily = settings.value("chatMessageFont").toString(fonts.messageFamily);
+    fonts.codeFamily = settings.value("chatCodeFont").toString(fonts.codeFamily);
 
     const QJsonArray tasksArray = root.value("tasks").toArray();
     for (const QJsonValue &value : tasksArray) {
@@ -142,7 +145,9 @@ QJsonDocument ConfigStore::toJson(const AppConfig &config) {
         {"apiKey", config.settings.apiKey},
         {"proxy", config.settings.proxy},
         {"hotkey", config.settings.hotkey},
-        {"maxChars", config.settings.maxChars}
+        {"maxChars", config.settings.maxChars},
+        {"chatMessageFont", config.settings.chatFonts.messageFamily},
+        {"chatCodeFont", config.settings.chatFonts.codeFamily}
     };
     if (!config.settings.modelParameters.isEmpty())
         settings.insert("modelParameters", config.settings.modelParameters);

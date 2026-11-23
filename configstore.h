@@ -6,6 +6,12 @@
 #include <QList>
 #include <QString>
 
+struct ChatFonts {
+    static constexpr int pointSize = 12;
+    QString messageFamily = QStringLiteral("Segoe UI");
+    QString codeFamily = QStringLiteral("Consolas");
+};
+
 struct AppSettings {
     QString apiEndpoint;
     QString modelName;
@@ -14,6 +20,7 @@ struct AppSettings {
     QString hotkey;
     int maxChars = 0;
     QJsonObject modelParameters;
+    ChatFonts chatFonts;
 };
 
 struct TaskDefinition {

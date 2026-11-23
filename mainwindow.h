@@ -54,6 +54,7 @@ private slots:
     void importSettings();
 
 signals:
+    void chatFontsChanged(const ChatFonts &fonts);
     void modelListLoadRequested(int requestId, const QString &baseUrl,
                                 const QString &apiKey, const QString &proxyText);
 
@@ -91,6 +92,7 @@ private:
     ModelListRequestParams cachedModelListParams;
     ModelInfoList cachedModelList;
     QJsonObject defaultModelParameters;
+    ChatFonts chatFonts;
 
     void createTrayIcon();
     void setHotkeyText(const QString &text);
@@ -113,6 +115,7 @@ private:
     void setDefaultModel(const QString &defaultModel);
     QString currentDefaultModel() const;
     void loadModelList(ModelListCallback callback);
+    void editChatFonts();
     void editModelParameters(TaskWidget *task);
     QString suggestedSettingsPath() const;
 };

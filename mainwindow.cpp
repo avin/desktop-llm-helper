@@ -3,6 +3,7 @@
 #include "taskwidget.h"
 #include "taskwindow.h"
 #include "hotkeymanager.h"
+#include "fontselectbox.h"
 #include "modelselectbox.h"
 #include "modellistloader.h"
 
@@ -15,7 +16,10 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFont>
 #include <QFormLayout>
+#include <QGroupBox>
+#include <QVBoxLayout>
 #include <QLabel>
 #include <QLocale>
 #include <QValidator>
@@ -346,6 +350,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->lineEditProxy, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditHotkey, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
     connect(ui->lineEditMaxChars, &QLineEdit::textChanged, this, &MainWindow::saveConfig);
+    connect(ui->pushButtonChatFonts, &QPushButton::clicked, this, &MainWindow::editChatFonts);
     connect(ui->modelSelectBoxModelName, &ModelSelectBox::modelsReloadRequested,
             this, &MainWindow::requestModelList);
     connect(ui->pushButtonExportSettings, &QPushButton::clicked,
@@ -572,6 +577,8 @@ void MainWindow::applyConfig(const AppConfig &config) {
     ui->lineEditMaxChars->setText(QString::number(config.settings.maxChars));
     setDefaultModel(config.settings.modelName);
     defaultModelParameters = config.settings.modelParameters;
+    chatFonts = config.settings.chatFonts;
+    emit chatFontsChanged(chatFonts);
 
     clearTasks();
     for (const TaskDefinition &task : config.tasks)
@@ -592,6 +599,7 @@ AppConfig MainWindow::buildConfigFromUi() const {
     config.settings.proxy = ui->lineEditProxy->text();
     config.settings.hotkey = ui->lineEditHotkey->text();
     config.settings.maxChars = ui->lineEditMaxChars->text().toInt();
+    config.settings.chatFonts = chatFonts;
     config.tasks = currentTaskDefinitions();
     return config;
 }
@@ -750,6 +758,48 @@ void MainWindow::handleModelListFailed(int requestId, const QString &message) {
 
     const PendingModelRequest request = pendingModelRequests.take(requestId);
     request.callback(ModelInfoList(), message);
+}
+
+void MainWindow::editChatFonts() {
+    auto *dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Chat Fonts"));
+    dialog->setMinimumWidth(360);
+    auto *layout = new QFormLayout(dialog);
+
+    auto *messageFont = new FontSelectBox(FontSelectBox::Filter::All, chatFonts.messageFamily, dialog);
+    auto *codeFont = new FontSelectBox(FontSelectBox::Filter::Monospaced, chatFonts.codeFamily, dialog);
+    layout->addRow(tr("Message font"), messageFont);
+    layout->addRow(tr("Code font"), codeFont);
+
+    auto *preview = new QGroupBox(tr("Preview"), dialog);
+    auto *previewLayout = new QVBoxLayout(preview);
+    auto *messageSample = new QLabel(tr("Here is a short example."), preview);
+    auto *codeSample = new QLabel(QStringLiteral("const auto answer = 42;"), preview);
+    previewLayout->addWidget(messageSample);
+    previewLayout->addWidget(codeSample);
+    layout->addRow(preview);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
+    const auto updatePreview = [=]() {
+        messageSample->setFont(QFont(messageFont->currentValue(), ChatFonts::pointSize));
+        codeSample->setFont(QFont(codeFont->currentValue(), ChatFonts::pointSize));
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(
+            !messageFont->currentValue().isEmpty() && !codeFont->currentValue().isEmpty());
+    };
+    connect(messageFont, &FontSelectBox::currentValueChanged, dialog, updatePreview);
+    connect(codeFont, &FontSelectBox::currentValueChanged, dialog, updatePreview);
+    updatePreview();
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(dialog, &QDialog::accepted, this, [this, messageFont, codeFont]() {
+        chatFonts.messageFamily = messageFont->currentValue();
+        chatFonts.codeFamily = codeFont->currentValue();
+        emit chatFontsChanged(chatFonts);
+        saveConfig();
+    });
+    dialog->open();
 }
 
 void MainWindow::editModelParameters(TaskWidget *task) {
@@ -927,6 +977,7 @@ void MainWindow::handleGlobalHotkey(int taskIndex) {
     auto *taskWindow = new TaskWindow(config.tasks, config.settings);
     latestTaskWindow = taskWindow;
     connect(qApp, &QApplication::aboutToQuit, taskWindow, &QWidget::close);
+    connect(this, &MainWindow::chatFontsChanged, taskWindow, &TaskWindow::setChatFonts);
     connect(taskWindow, &TaskWindow::taskResponsePrefsChanged,
             this, &MainWindow::updateTaskResponsePrefs);
     connect(taskWindow, &TaskWindow::taskResponsePrefsCommitRequested,

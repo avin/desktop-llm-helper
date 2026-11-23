@@ -70,6 +70,7 @@ public:
 
     void showMenu();
     void runTask(int taskIndex);
+    void setChatFonts(const ChatFonts &fonts);
     bool isCapturingSelection() const;
     bool hasResponseWindow() const;
 
@@ -150,6 +151,7 @@ private:
     void insertResponse(const QString &text);
     void ensureResponseWindow();
     void updateResponseView();
+    void applyChatMessageFont();
     void applyMarkdownStyles();
     void updateFollowUpHeight();
     void appendMessageToHistory(const QString &role, const QString &content);

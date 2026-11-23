@@ -148,7 +148,14 @@
           </property>
          </widget>
         </item>
-        <item row="6" column="0" colspan="2">
+        <item row="6" column="1" alignment="Qt::AlignLeft">
+         <widget class="QPushButton" name="pushButtonChatFonts">
+          <property name="text">
+           <string>Chat Fonts...</string>
+          </property>
+         </widget>
+        </item>
+        <item row="7" column="0" colspan="2">
          <spacer name="verticalSpacerSettings">
           <property name="orientation">
            <enum>Qt::Vertical</enum>
@@ -161,7 +168,7 @@
           </property>
          </spacer>
         </item>
-        <item row="7" column="0" colspan="2">
+        <item row="8" column="0" colspan="2">
          <layout class="QHBoxLayout" name="horizontalLayoutSettingsActions">
           <item>
            <spacer name="horizontalSpacerSettingsActions">

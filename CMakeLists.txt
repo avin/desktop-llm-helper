@@ -21,8 +21,12 @@ set(PROJECT_SOURCES
         mainwindow.cpp
         mainwindow.h
         mainwindow.ui
+        searchableselectbox.cpp
+        searchableselectbox.h
         modelselectbox.cpp
         modelselectbox.h
+        fontselectbox.cpp
+        fontselectbox.h
         modelinfo.h
         modellistloader.cpp
         modellistloader.h
