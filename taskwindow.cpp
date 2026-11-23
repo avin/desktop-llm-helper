@@ -3,6 +3,7 @@
 
 #include <QClipboard>
 #include <QAbstractTextDocumentLayout>
+#include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
@@ -455,7 +456,7 @@ const QString &markdownCss() {
 }
 
 TaskWindow *TaskWindow::s_activeMenu = nullptr;
-TaskWindow *TaskWindow::s_activeOperation = nullptr;
+QList<TaskWindow *> TaskWindow::s_activeOperations;
 HHOOK TaskWindow::s_keyboardHook = nullptr;
 HHOOK TaskWindow::s_mouseHook = nullptr;
 HHOOK TaskWindow::s_operationKeyboardHook = nullptr;
@@ -678,6 +679,10 @@ void TaskWindow::runTask(int taskIndex) {
 
 bool TaskWindow::isCapturingSelection() const {
     return capturingSelection;
+}
+
+bool TaskWindow::hasResponseWindow() const {
+    return !responseWindow.isNull();
 }
 
 TaskWindow::~TaskWindow() {
@@ -997,9 +1002,13 @@ void TaskWindow::ensureResponseWindow() {
         return;
 
     responseWindow = new QDialog(this);
-    responseWindow->setAttribute(Qt::WA_DeleteOnClose, true);
     responseWindow->setWindowFlags(responseWindow->windowFlags() | Qt::Dialog);
     responseWindow->installEventFilter(this);
+    connect(responseWindow, &QDialog::finished, this, [this]() {
+        cancelRequest();
+        emit taskResponsePrefsCommitRequested();
+        deleteLater();
+    });
 
     auto *lay = new QVBoxLayout(responseWindow);
     auto *view = new MarkdownTextBrowser(responseWindow);
@@ -1346,26 +1355,18 @@ void TaskWindow::resetConversationState() {
 }
 
 void TaskWindow::setRequestInFlight(bool inFlight) {
-    if (requestInFlight == inFlight) {
-        if (inFlight)
-            installOperationCancelHook();
-        else
-            removeOperationCancelHook();
-    } else if (inFlight) {
+    if (inFlight)
         installOperationCancelHook();
-    } else {
+    else
         removeOperationCancelHook();
-    }
 
     requestInFlight = inFlight;
     if (followUpInput)
         followUpInput->setEnabled(!inFlight);
     updateActionButtonState();
-    if (!inFlight && followUpInput && responseWindow && responseWindow->isVisible()) {
-        responseWindow->raise();
-        responseWindow->activateWindow();
+    if (!inFlight && responseWindow && responseWindow->isActiveWindow()) {
         QTimer::singleShot(0, this, [this]() {
-            if (followUpInput)
+            if (followUpInput && responseWindow && responseWindow->isActiveWindow())
                 followUpInput->setFocus(Qt::OtherFocusReason);
         });
     }
@@ -1492,12 +1493,6 @@ bool TaskWindow::eventFilter(QObject *watched, QEvent *event) {
         }
     }
     if (responseWindow && watched == responseWindow.data()
-        && event->type() == QEvent::Close) {
-        // Ensure LLM request is stopped same as pressing Stop button
-        cancelRequest();
-        emit taskResponsePrefsCommitRequested();
-    }
-    if (responseWindow && watched == responseWindow.data()
         && event->type() == QEvent::Resize) {
         auto *resizeEvent = static_cast<QResizeEvent *>(event);
         handleResponseResize(resizeEvent->size());
@@ -1576,7 +1571,8 @@ void TaskWindow::removeMenuHooks() {
 }
 
 void TaskWindow::installOperationCancelHook() {
-    s_activeOperation = this;
+    if (!s_activeOperations.contains(this))
+        s_activeOperations.append(this);
     if (!s_operationKeyboardHook) {
         s_operationKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL,
                                                     LowLevelOperationKeyboardProc,
@@ -1586,10 +1582,8 @@ void TaskWindow::installOperationCancelHook() {
 }
 
 void TaskWindow::removeOperationCancelHook() {
-    if (s_activeOperation != this)
-        return;
-    s_activeOperation = nullptr;
-    if (s_operationKeyboardHook) {
+    s_activeOperations.removeOne(this);
+    if (s_activeOperations.isEmpty() && s_operationKeyboardHook) {
         UnhookWindowsHookEx(s_operationKeyboardHook);
         s_operationKeyboardHook = nullptr;
     }
@@ -1627,11 +1621,21 @@ LRESULT CALLBACK TaskWindow::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM 
 LRESULT CALLBACK TaskWindow::LowLevelOperationKeyboardProc(int nCode,
                                                            WPARAM wParam,
                                                            LPARAM lParam) {
-    if (nCode == HC_ACTION && s_activeOperation) {
+    if (nCode == HC_ACTION && !s_activeMenu && !s_activeOperations.isEmpty()
+        && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
         const auto *data = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
-        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            if (s_activeOperation->handleOperationHookKey(static_cast<UINT>(data->vkCode)))
+        if (data->vkCode == VK_ESCAPE) {
+            auto *operation = s_activeOperations.back();
+            if (auto *activeWindow = QApplication::activeWindow()) {
+                if (auto *taskWindow = qobject_cast<TaskWindow *>(activeWindow->parentWidget());
+                    taskWindow && activeWindow == taskWindow->responseWindow.data()) {
+                    operation = taskWindow;
+                }
+            }
+            if (operation->requestInFlight) {
+                operation->cancelRequest();
                 return 1;
+            }
         }
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
@@ -1666,13 +1670,6 @@ bool TaskWindow::handleHookKey(UINT vk) {
         default:
             return false;
     }
-}
-
-bool TaskWindow::handleOperationHookKey(UINT vk) {
-    if (vk != VK_ESCAPE || !requestInFlight)
-        return false;
-    cancelRequest();
-    return true;
 }
 
 void TaskWindow::handleHookMouseClick(const POINT &pt) {

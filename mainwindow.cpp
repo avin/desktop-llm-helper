@@ -282,7 +282,7 @@ MainWindow::MainWindow(QWidget *parent)
       , hotkeyManager(new HotkeyManager(this))
       , loadingConfig(false)
       , trayIcon(nullptr)
-      , menuWindow(nullptr)
+      , latestTaskWindow(nullptr)
       , modelLoaderThread(new QThread(this))
       , modelListLoader(new ModelListLoader)
       , nextModelRequestId(0)
@@ -911,7 +911,7 @@ void MainWindow::editModelParameters(TaskWidget *task) {
 }
 
 void MainWindow::handleGlobalHotkey(int taskIndex) {
-    if (menuWindow && menuWindow->isCapturingSelection())
+    if (latestTaskWindow && latestTaskWindow->isCapturingSelection())
         return;
 
     const AppConfig config = buildConfigFromUi();
@@ -922,17 +922,19 @@ void MainWindow::handleGlobalHotkey(int taskIndex) {
     if (!openMenu && (taskIndex < 0 || taskIndex >= config.tasks.size()))
         return;
 
-    if (menuWindow)
-        menuWindow->close();
-    menuWindow = new TaskWindow(config.tasks, config.settings);
-    connect(menuWindow, &TaskWindow::taskResponsePrefsChanged,
+    if (latestTaskWindow && !latestTaskWindow->hasResponseWindow())
+        latestTaskWindow->close();
+    auto *taskWindow = new TaskWindow(config.tasks, config.settings);
+    latestTaskWindow = taskWindow;
+    connect(qApp, &QApplication::aboutToQuit, taskWindow, &QWidget::close);
+    connect(taskWindow, &TaskWindow::taskResponsePrefsChanged,
             this, &MainWindow::updateTaskResponsePrefs);
-    connect(menuWindow, &TaskWindow::taskResponsePrefsCommitRequested,
+    connect(taskWindow, &TaskWindow::taskResponsePrefsCommitRequested,
             this, &MainWindow::commitTaskResponsePrefs);
     if (openMenu)
-        menuWindow->showMenu();
+        taskWindow->showMenu();
     else
-        menuWindow->runTask(taskIndex);
+        taskWindow->runTask(taskIndex);
 }
 
 void MainWindow::createTrayIcon() {

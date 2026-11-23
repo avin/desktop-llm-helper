@@ -71,6 +71,7 @@ public:
     void showMenu();
     void runTask(int taskIndex);
     bool isCapturingSelection() const;
+    bool hasResponseWindow() const;
 
 signals:
     void taskResponsePrefsChanged(int taskIndex, const QSize &size, int zoom);
@@ -128,7 +129,7 @@ private:
     std::unique_ptr<QMimeData> originalClipboardData;
 
     static TaskWindow *s_activeMenu;
-    static TaskWindow *s_activeOperation;
+    static QList<TaskWindow *> s_activeOperations;
     static HHOOK s_keyboardHook;
     static HHOOK s_mouseHook;
     static HHOOK s_operationKeyboardHook;
@@ -171,7 +172,6 @@ private:
     void installOperationCancelHook();
     void removeOperationCancelHook();
     bool handleHookKey(UINT vk);
-    bool handleOperationHookKey(UINT vk);
     void handleHookMouseClick(const POINT &pt);
     bool isPointInsideMenu(const POINT &pt) const;
     void setMenuActiveIndex(int index);

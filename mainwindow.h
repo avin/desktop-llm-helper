@@ -82,7 +82,7 @@ private:
     HotkeyManager *hotkeyManager;
     bool loadingConfig;
     QSystemTrayIcon *trayIcon;
-    QPointer<TaskWindow> menuWindow;
+    QPointer<TaskWindow> latestTaskWindow;
     QThread *modelLoaderThread;
     ModelListLoader *modelListLoader;
     int nextModelRequestId;
